@@ -1,0 +1,41 @@
+{
+  "_readme": "Provider setup for opencode itself — merge into ~/.config/opencode/opencode.json. Prefer `opencode auth login` for keys; it stores them outside your config file.",
+  "$schema": "https://opencode.ai/config.json",
+
+  "provider": {
+    "openrouter": {
+      "_comment": "Built in. Just run: opencode auth login → openrouter. Models appear as openrouter/<vendor>/<model>.",
+      "options": { "apiKey": "{env:OPENROUTER_API_KEY}" }
+    },
+
+    "zai": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Z.AI",
+      "_endpoints": "GLM Coding Plan (subscription): https://api.z.ai/api/coding/paas/v4 — pay-as-you-go API: https://api.z.ai/api/paas/v4",
+      "options": { "baseURL": "https://api.z.ai/api/coding/paas/v4", "apiKey": "{env:ZAI_API_KEY}" },
+      "models": {
+        "glm-4.7": { "name": "GLM-4.7" },
+        "glm-4.7-flash": { "name": "GLM-4.7 Flash" }
+      }
+    },
+
+    "deepseek": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "DeepSeek",
+      "options": { "baseURL": "https://api.deepseek.com/v1", "apiKey": "{env:DEEPSEEK_API_KEY}" },
+      "models": {
+        "deepseek-chat": { "name": "DeepSeek Chat" },
+        "deepseek-reasoner": { "name": "DeepSeek Reasoner" }
+      }
+    },
+
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local)",
+      "options": { "baseURL": "http://localhost:11434/v1", "apiKey": "ollama" },
+      "models": {
+        "qwen3-coder:30b": { "name": "Qwen3 Coder 30B (local)" }
+      }
+    }
+  }
+}

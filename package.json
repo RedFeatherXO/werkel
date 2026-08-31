@@ -1,0 +1,17 @@
+{
+  "name": "opencode-fleet",
+  "version": "0.1.0",
+  "description": "Claude manages, OpenCode workers on cheap models execute — an MCP bridge with git-worktree isolation and a price guard.",
+  "type": "module",
+  "bin": { "ocfleet": "./bin/ocfleet.mjs" },
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "doctor": "node bin/ocfleet.mjs doctor",
+    "mcp": "node bin/ocfleet.mjs mcp",
+    "test": "node test/mcp_smoke.mjs /tmp/opencode-fleet-testrepo"
+  },
+  "files": ["bin", "src", "config", "skills", "docs", "scripts", "README.md"],
+  "keywords": ["mcp", "opencode", "claude", "agents", "orchestration", "openrouter"],
+  "license": "MIT",
+  "dependencies": {}
+}

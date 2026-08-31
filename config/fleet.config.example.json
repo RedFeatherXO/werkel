@@ -1,0 +1,76 @@
+{
+  "_readme": "Copy to ~/.opencode-fleet/fleet.config.json (global) or <repo>/.opencode-fleet.json (per project). All prices are USD per 1,000,000 tokens.",
+
+  "defaults": {
+    "profile": "balanced",
+    "timeoutSec": 1200,
+    "worktree": true,
+    "autoApprove": true,
+    "autoCommit": true,
+    "maxConcurrentJobs": 4
+  },
+
+  "budget": {
+    "_comment": "The guard every delegation passes. Lower the two ceilings to make the fleet cheaper; raise maxDailyUsd carefully.",
+    "maxPromptUsdPerMTok": 1.0,
+    "maxCompletionUsdPerMTok": 4.0,
+    "maxJobUsd": 0.75,
+    "maxDailyUsd": 10.0,
+    "requireToolSupport": true,
+    "minContext": 100000,
+    "allowUnpriced": false,
+    "allow": [],
+    "deny": ["*gpt-5*", "*claude*", "*gemini*-pro*", "*opus*"]
+  },
+
+  "profiles": {
+    "cheap": {
+      "description": "Boilerplate, tests, renames, mechanical refactors",
+      "candidates": [
+        "openrouter/qwen/qwen3-coder-30b-a3b-instruct",
+        "openrouter/z-ai/glm-4.7-flash",
+        "openrouter/deepseek/deepseek-v4-flash"
+      ]
+    },
+    "balanced": {
+      "description": "Default worker: features, bug fixes, medium refactors",
+      "candidates": [
+        "openrouter/qwen/qwen3-coder",
+        "openrouter/qwen/qwen3-coder-next",
+        "openrouter/mistralai/codestral-2508",
+        "zai/glm-4.7"
+      ]
+    },
+    "strong": {
+      "description": "Tricky logic, cross-file changes, unclear bugs",
+      "candidates": [
+        "openrouter/qwen/qwen3-coder-plus",
+        "openrouter/moonshotai/kimi-k2.7-code",
+        "openrouter/z-ai/glm-5.3"
+      ]
+    },
+    "longcontext": {
+      "description": "Jobs that must read a lot of files at once",
+      "candidates": [
+        "openrouter/deepseek/deepseek-v4-flash",
+        "openrouter/qwen/qwen3.7-flash"
+      ]
+    },
+    "local": {
+      "description": "Free local models — configure the provider in opencode first",
+      "candidates": ["ollama/qwen3-coder:30b"]
+    }
+  },
+
+  "staticPricing": {
+    "_comment": "Prices for providers that are not on OpenRouter. Without an entry the model counts as unpriced and is refused.",
+    "zai/glm-4.7": { "prompt": 0.60, "completion": 2.20, "context": 200000, "tools": true },
+    "deepseek/deepseek-chat": { "prompt": 0.28, "completion": 0.42, "context": 128000, "tools": true },
+    "ollama/*": { "prompt": 0, "completion": 0, "context": 128000, "tools": true }
+  },
+
+  "worktree": {
+    "root": "~/.opencode-fleet/worktrees",
+    "branchPrefix": "fleet/"
+  }
+}
