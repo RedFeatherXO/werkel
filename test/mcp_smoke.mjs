@@ -77,6 +77,23 @@ const call = async (name, args) => {
 
 const ok = (label, cond, extra = "") => console.log(`${cond ? "PASS" : "FAIL"}  ${label}${extra ? "  — " + extra : ""}`);
 
+/** A failed job is useless without its stderr — show it right here. */
+async function explainFailure(jobId) {
+  if (!jobId) return;
+  const fsx = await import("node:fs");
+  const dir = path.join(TEST_HOME, "jobs", jobId);
+  for (const f of ["stderr.log", "events.ndjson"]) {
+    try {
+      const txt = fsx.readFileSync(path.join(dir, f), "utf8").trim();
+      if (txt) console.log(`      [${f}] ${txt.split("\n").slice(-6).join("\n      ")}`);
+    } catch {}
+  }
+  try {
+    const meta = JSON.parse(fsx.readFileSync(path.join(dir, "job.json"), "utf8"));
+    console.log(`      [job] state=${meta.state} exit=${meta.exitCode} model=${meta.model} error=${(meta.error || "").slice(0, 300)}`);
+  } catch {}
+}
+
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "1" } });
 ok("initialize", init.result?.serverInfo?.name === "opencode-fleet", init.result?.serverInfo?.version);
 srv.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
@@ -99,16 +116,41 @@ ok("budget guard blocks premium", !!blocked.error, blocked.error?.slice(0, 70));
 const unknown = await call("fleet_delegate", { task: "x", repo: REPO, model: "openrouter/nope/nope" });
 ok("unknown model refused", !!unknown.error, unknown.error?.slice(0, 60));
 
+// First contact with a provider makes opencode fetch its npm package, which can
+// take minutes. Do that once, slowly, before timing anything else — in a scratch
+// directory and read-only, so the test repo stays pristine for the apply tests.
+const WARM_DIR = "/tmp/opencode-fleet-warmup";
+{
+  const fsx = await import("node:fs");
+  fsx.rmSync(WARM_DIR, { recursive: true, force: true });
+  fsx.mkdirSync(WARM_DIR, { recursive: true });
+  fsx.copyFileSync(path.join(REPO, "opencode.json"), path.join(WARM_DIR, "opencode.json"));
+}
+const warm = await call("fleet_delegate", { task: "Antworte nur mit: bereit.", repo: WARM_DIR,
+  model: "mock/mock-coder", title: "warmup", timeoutSec: 420, worktree: false, readOnly: true });
+const warmDone = await call("fleet_wait", { jobIds: [warm.jobId], timeoutSec: 420 });
+const warmState = warmDone.done?.[0]?.state;
+ok("mock provider starts", warmState === "done", warmState ?? "no result");
+if (warmState !== "done") {
+  await explainFailure(warm.jobId);
+  console.log("\n  The mock provider could not run — everything below would fail for that reason.");
+  console.log("  Usually: opencode is still installing @ai-sdk/openai-compatible, or port 8099 is taken.\n");
+  srv.kill(); shutdown();
+  process.exit(1);
+}
+
 // two parallel jobs, isolated worktrees
-const a = await call("fleet_delegate", { task: "Job A: edit TARGET=src/a.js with CONTENT=export const a = 1;", repo: REPO, model: "mock/mock-coder", title: "A", timeoutSec: 90 });
-const b = await call("fleet_delegate", { task: "Job B: edit TARGET=src/b.js with CONTENT=export const b = 2;", repo: REPO, model: "mock/mock-coder", title: "B", timeoutSec: 90 });
+const a = await call("fleet_delegate", { task: "Job A: edit TARGET=src/a.js with CONTENT=export const a = 1;", repo: REPO, model: "mock/mock-coder", title: "A", timeoutSec: 240 });
+const b = await call("fleet_delegate", { task: "Job B: edit TARGET=src/b.js with CONTENT=export const b = 2;", repo: REPO, model: "mock/mock-coder", title: "B", timeoutSec: 240 });
 ok("two jobs started", !!a.jobId && !!b.jobId, `${a.jobId} / ${b.jobId}`);
 ok("suite stays on the mock model", [a, b].every(j => j.model === "mock/mock-coder"),
    `${a.model} / ${b.model}`);
 ok("separate worktrees", a.worktree.path !== b.worktree.path);
 
-const waited = await call("fleet_wait", { jobIds: [a.jobId, b.jobId], timeoutSec: 180 });
-ok("both finished", waited.done?.length === 2 && waited.done.every(j => j.state === "done"), JSON.stringify(waited.done?.map(j => j.state)));
+const waited = await call("fleet_wait", { jobIds: [a.jobId, b.jobId], timeoutSec: 300 });
+const bothDone = waited.done?.length === 2 && waited.done.every(j => j.state === "done");
+ok("both finished", bothDone, JSON.stringify(waited.done?.map(j => j.state)));
+if (!bothDone) { await explainFailure(a.jobId); await explainFailure(b.jobId); }
 
 const res = await call("fleet_result", { jobId: a.jobId });
 ok("result has report", !!res.report, res.report?.slice(0, 50));
@@ -130,7 +172,7 @@ const appliedB = await call("fleet_apply", { jobId: b.jobId, mode: "merge" });
 ok("second job merges too", appliedB.ok === true, appliedB.error?.slice(0, 120));
 
 // a job whose branch conflicts must fail loudly, not silently
-const c = await call("fleet_delegate", { task: "Job C: edit TARGET=src/a.js with CONTENT=export const a = 999;", repo: REPO, model: "mock/mock-coder", title: "C", timeoutSec: 90, baseRef: "HEAD~2" });
+const c = await call("fleet_delegate", { task: "Job C: edit TARGET=src/a.js with CONTENT=export const a = 999;", repo: REPO, model: "mock/mock-coder", title: "C", timeoutSec: 240, baseRef: "HEAD~2" });
 await call("fleet_wait", { jobIds: [c.jobId], timeoutSec: 120 });
 const conflicted = await call("fleet_apply", { jobId: c.jobId, mode: "merge" });
 ok("conflict reported with hint", conflicted.ok === false && /conflict|merge failed/i.test(conflicted.error ?? ""), (conflicted.error ?? "").slice(0, 90));
