@@ -11,6 +11,7 @@ import { allowedModels, spentToday, suggestProfiles } from "../src/models.mjs";
 import * as J from "../src/jobs.mjs";
 import { applyJob, removeWorktree, diffSummary } from "../src/worktree.mjs";
 import { doctor } from "../src/doctor.mjs";
+import { report } from "../src/reporter.mjs";
 import { serve } from "../src/mcp.mjs";
 import { usd, humanDuration } from "../src/util.mjs";
 
@@ -73,6 +74,10 @@ ocfleet — delegate coding jobs from Claude to OpenCode workers on cheaper mode
   ocfleet apply <jobId> [--mode merge|squash|patch] [--target branch]
   ocfleet cleanup <jobId> [--force]      remove worktree + branch
   ocfleet cancel <jobId>                 kill a running job
+  ocfleet report --to <url> [opts]       push job state to a remote dashboard
+      --token <t>         auth token (env FLEET_INGEST_TOKEN works too)
+      --interval <sec>    seconds between cycles (default 5)
+      --once              one cycle and exit (for cron and tests)
   ocfleet mcp                            run as an MCP stdio server (for Claude)
   ocfleet install [--scope user|project|print]   register the MCP server with Claude Code
   ocfleet init-config [--force]          write a starter fleet.config.json
@@ -247,6 +252,21 @@ const cmds = {
   },
 
   async cancel(a) { jsonOut(await J.cancel(a._[0])); },
+
+  async report(a) {
+    if (!a.flags.to) {
+      p("missing --to <dashboard-url> — e.g. ocfleet report --to http://minipc:7777");
+      process.exitCode = 1;
+      return;
+    }
+    await report({
+      to: a.flags.to,
+      token: a.flags.token ?? process.env.FLEET_INGEST_TOKEN,
+      intervalSec: Number(a.flags.interval ?? 5),
+      once: !!a.flags.once,
+      log: (msg) => p(`  ${new Date().toISOString()}  ${msg}`)
+    });
+  },
 
   async mcp() { serve(); },
 
