@@ -61,8 +61,40 @@ export function runSync(cmd, args, opts = {}) {
 }
 
 export function which(bin) {
+  if (bin && (bin.includes("/") || bin.includes("\\"))) return fs.existsSync(bin) ? bin : null;
   const r = runSync(process.platform === "win32" ? "where" : "which", [bin]);
-  return r.ok ? r.stdout.trim().split("\n")[0] : null;
+  if (r.ok && r.stdout.trim()) return r.stdout.trim().split("\n")[0];
+  return whichDeep(bin);
+}
+
+/**
+ * A GUI client (Claude desktop) starts without the shell PATH, so nvm/volta/nodenv
+ * installs are invisible to plain `which`. Look where they actually live before
+ * declaring a binary missing.
+ */
+export function whichDeep(bin) {
+  const dirs = [
+    "/usr/local/bin", "/usr/bin", "/opt/homebrew/bin", "/snap/bin",
+    path.join(HOME, ".npm-global/bin"), path.join(HOME, ".local/bin"),
+    path.join(HOME, ".bun/bin"), path.join(HOME, ".volta/bin"),
+    path.join(HOME, "bin")
+  ];
+  for (const base of [path.join(HOME, ".nvm/versions/node"), path.join(HOME, ".nodenv/versions"), path.join(HOME, ".asdf/installs/nodejs")]) {
+    try {
+      for (const v of fs.readdirSync(base).sort().reverse()) dirs.push(path.join(base, v, "bin"));
+    } catch {}
+  }
+  for (const d of dirs) {
+    const f = path.join(d, bin);
+    try { if (fs.existsSync(f) && (fs.statSync(f).mode & 0o111)) return f; } catch {}
+  }
+  return null;
+}
+
+/** Absolute path to the opencode binary, so jobs work no matter who spawned us. */
+export function resolveBin(cfg) {
+  const configured = cfg?.opencodeBin ?? "opencode";
+  return which(configured) ?? configured;
 }
 
 export function truncate(str, max, note = "\n… [truncated]") {

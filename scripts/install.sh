@@ -31,14 +31,9 @@ else
   say "· keeping existing $CFG"
 fi
 
-if command -v claude >/dev/null; then
-  claude mcp add --scope user opencode-fleet -- node "$ROOT/bin/ocfleet.mjs" mcp >/dev/null 2>&1 \
-    && say "✓ registered MCP server with Claude Code (user scope)" \
-    || say "· MCP registration skipped (already present?) — see README for manual config"
-else
-  say "· claude CLI not found — add this to your MCP client config:"
-  printf '\n    "opencode-fleet": { "command": "node", "args": ["%s/bin/ocfleet.mjs", "mcp"] }\n\n' "$ROOT"
-fi
+# registers with Claude Code if present, pins absolute binaries, prints the
+# desktop-app JSON block
+node "$ROOT/bin/ocfleet.mjs" install --scope user
 
 SKILLS_DIR="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DIR"
@@ -48,7 +43,8 @@ cp -r "$ROOT/skills/opencode-fleet" "$SKILLS_DIR/" 2>/dev/null \
 
 echo
 say "next:"
-say "  1. opencode auth login          # openrouter / zai / deepseek"
-say "  2. node $ROOT/bin/ocfleet.mjs doctor --warmup"
-say "  3. ask Claude: \"delegate the failing parser tests to a cheap worker\""
+say "  1. opencode auth login                              # openrouter / zai / deepseek / opencode zen"
+say "  2. node $ROOT/bin/ocfleet.mjs suggest --write       # profiles from the providers you have"
+say "  3. node $ROOT/bin/ocfleet.mjs doctor                # verify"
+say "  4. ask Claude: \"delegate the failing parser tests to a cheap worker\""
 echo

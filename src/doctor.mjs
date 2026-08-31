@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { which, run, stateDir, readJson, humanDuration } from "./util.mjs";
+import { which, run, stateDir, readJson, humanDuration, resolveBin } from "./util.mjs";
 import { loadConfig } from "./config.mjs";
 import { installedModels, installedModelsSmart, openrouterCatalog, budgetCheck, spentToday } from "./models.mjs";
 import { listJobIds, readJob, refreshAll } from "./jobs.mjs";
@@ -14,9 +14,10 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
   // 1. binaries
   const bin = which(cfg.opencodeBin);
   out.info.opencode = bin ?? "NOT FOUND";
+  if (bin && !cfg.opencodeBin.includes("/")) out.info.opencodeResolved = bin;
   if (!bin) fail(`opencode binary "${cfg.opencodeBin}" not found`, "npm i -g opencode-ai");
   else {
-    const v = await run(cfg.opencodeBin, ["--version"], { timeout: 20000 });
+    const v = await run(bin, ["--version"], { timeout: 20000 });
     out.info.opencodeVersion = v.stdout.trim() || "?";
   }
   out.info.git = which("git") ?? "NOT FOUND";
@@ -31,7 +32,7 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
   // 3. models
   let installed = [];
   if (bin) {
-    installed = await installedModelsSmart(cfg, { bin: cfg.opencodeBin, cwd: repo, refresh: true });
+    installed = await installedModelsSmart(cfg, { bin, cwd: repo, refresh: true });
     out.info.installedModelCount = installed.length;
     if (!installed.length) fail("opencode reports no models", "run: opencode auth login (pick openrouter / zai / deepseek)");
   }
@@ -83,7 +84,7 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
       const t0 = Date.now();
       // --print-logs so a failure says *why*; the first run of a new provider
       // downloads its npm package and can legitimately take minutes.
-      const r = await run(cfg.opencodeBin,
+      const r = await run(bin,
         ["run", "--print-logs", "--log-level", "INFO", "--model", model, "reply with the single word: ready"],
         { timeout: 600000, cwd: repo });
       const tail = (r.stderr || "").trim().split("\n").slice(-6).join("\n");

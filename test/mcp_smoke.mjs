@@ -121,6 +121,30 @@ const cleanA = await call("fleet_cleanup", { jobId: a.jobId, force: true });
 const cleanB = await call("fleet_cleanup", { jobId: b.jobId, force: true });
 ok("cleanup both", cleanA.ok && cleanB.ok);
 
+// suggestion ranking: a cheap tier must not be filled with mini/nano models,
+// and a strong tier must not be cheaper than the balanced one
+{
+  const { loadConfig } = await import(path.join(ROOT, "src/config.mjs"));
+  const M = await import(path.join(ROOT, "src/models.mjs"));
+  const C = await import(path.join(ROOT, "src/catalog.mjs"));
+  const md = await C.modelsDevCatalog();
+  const inv = [];
+  for (const prov of ["openrouter", "opencode"]) for (const m of Object.keys(md[prov] ?? {})) inv.push(prov + "/" + m);
+  const cfg = loadConfig("/nonexistent");
+  const sug = await M.suggestProfiles(cfg, { cwd: "/tmp", installedOverride: inv, authOverride: ["openrouter", "opencode"] });
+  const names = (t) => (sug.profiles[t]?.candidates ?? []).join(" ");
+  ok("suggest: all tiers filled", ["free","cheap","balanced","strong","longcontext"].every(t => sug.profiles[t]?.candidates?.length),
+     Object.keys(sug.profiles).join(","));
+  ok("suggest: no mini/nano in paid tiers", !/nano|mini|tiny|-3b|-8b/i.test(names("cheap") + names("balanced") + names("strong")),
+     names("cheap").split(" ")[0]);
+  const price = (ref) => M.priceInfo(ref, cfg, {}, md).prompt ?? 0;
+  const avg = (t) => (sug.profiles[t]?.candidates ?? []).reduce((s, r) => s + price(r), 0) / (sug.profiles[t]?.candidates?.length || 1);
+  ok("suggest: tiers ordered by capability", avg("cheap") < avg("balanced") && avg("balanced") <= avg("strong"),
+     `cheap $${avg("cheap").toFixed(2)} < balanced $${avg("balanced").toFixed(2)} <= strong $${avg("strong").toFixed(2)}`);
+  ok("suggest: longcontext is cheap and wide", (sug.profiles.longcontext.candidates ?? []).some(r => price(r) < 0.3),
+     sug.profiles.longcontext.candidates[0]);
+}
+
 const status = await call("fleet_status", {});
 ok("status lists history", status.recent?.length >= 2, `${status.recent?.length} recent, spent $${status.spentTodayUsd}`);
 

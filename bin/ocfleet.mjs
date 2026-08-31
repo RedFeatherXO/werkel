@@ -250,17 +250,38 @@ const cmds = {
   async install(a) {
     const entry = path.join(ROOT, "bin", "ocfleet.mjs");
     const scope = a.flags.scope ?? "user";
-    const cfgJson = { mcpServers: { "opencode-fleet": { command: "node", args: [entry, "mcp"] } } };
-    if (scope === "print") return jsonOut(cfgJson);
-    const { runSync, which } = await import("../src/util.mjs");
-    if (!which("claude")) {
-      p("claude CLI not found. Add this to your MCP client config manually:\n");
-      jsonOut(cfgJson);
-      return;
+    const { runSync, which, stateDir, ensureDir, readJson, writeJson } = await import("../src/util.mjs");
+
+    // A GUI client inherits no shell PATH: nvm/volta node and opencode would be
+    // invisible. Pin both to absolute paths at registration time.
+    const nodeBin = process.execPath;
+    const ocBin = which("opencode");
+    const cfgJson = { mcpServers: { "opencode-fleet": { command: nodeBin, args: [entry, "mcp"] } } };
+
+    if (ocBin) {
+      const target = path.join(ensureDir(stateDir()), "fleet.config.json");
+      const current = readJson(target, {});
+      if (current.opencodeBin !== ocBin) {
+        current.opencodeBin = ocBin;
+        writeJson(target, current);
+        p(`  ✓ pinned opencodeBin → ${ocBin}`);
+      }
+    } else {
+      p("  ⚠ opencode binary not found — install it (npm i -g opencode-ai) before delegating");
     }
-    const r = runSync("claude", ["mcp", "add", "--scope", scope, "opencode-fleet", "--", "node", entry, "mcp"]);
-    p(r.ok ? `✓ registered with Claude Code (scope: ${scope})\n  ${r.stdout.trim()}` : `✗ ${r.stderr || r.error}\n\nAdd manually:\n${JSON.stringify(cfgJson, null, 2)}`);
-    p(`\nSkill (optional): cp -r ${path.join(ROOT, "skills", "opencode-fleet")} ~/.claude/skills/`);
+
+    if (scope === "print") return jsonOut(cfgJson);
+
+    if (which("claude")) {
+      const r = runSync("claude", ["mcp", "add", "--scope", scope, "opencode-fleet", "--", nodeBin, entry, "mcp"]);
+      p(r.ok ? `  ✓ registered with Claude Code (scope: ${scope})` : `  ✗ Claude Code registration failed: ${(r.stderr || r.error || "").trim()}`);
+    } else {
+      p("  · claude CLI not found (npm i -g @anthropic-ai/claude-code to get it)");
+    }
+
+    p("\n  For the Claude desktop app, add this to its MCP config:\n");
+    p(JSON.stringify(cfgJson, null, 2).split("\n").map((l) => "    " + l).join("\n"));
+    p(`\n  Skill: cp -r ${path.join(ROOT, "skills", "opencode-fleet")} ~/.claude/skills/\n`);
   },
 
   async "init-config"(a) {

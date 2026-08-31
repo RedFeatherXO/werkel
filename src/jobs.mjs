@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { stateDir, ensureDir, readJson, writeJson, newId, expandHome, truncate, humanDuration, run } from "./util.mjs";
+import { stateDir, ensureDir, readJson, writeJson, newId, expandHome, truncate, humanDuration, run, resolveBin } from "./util.mjs";
 import { loadConfig } from "./config.mjs";
 import { resolveModel, openrouterCatalog, installedModelsSmart, spentToday, recordSpend, estimateCost, priceInfo } from "./models.mjs";
 import { createWorktree, commitAll, diffSummary, repoRoot } from "./worktree.mjs";
@@ -110,10 +110,11 @@ export async function delegate(input) {
 
   const spend = spentToday();
   const orCatalog = await openrouterCatalog().catch(() => ({}));
-  const installed = await installedModelsSmart(cfg, { bin: cfg.opencodeBin, cwd: dirIn });
+  const bin = resolveBin(cfg);
+  const installed = await installedModelsSmart(cfg, { bin, cwd: dirIn });
   const picked = await resolveModel(
     { model: input.model, profile: input.profile },
-    cfg, { bin: cfg.opencodeBin, cwd: dirIn, orCatalog, installed, spentToday: spend.total ?? 0 }
+    cfg, { bin, cwd: dirIn, orCatalog, installed, spentToday: spend.total ?? 0 }
   );
   if (picked.error) return { error: picked.error, rejected: picked.rejected, hint: picked.hint, spentToday: spend.total };
 
@@ -198,7 +199,7 @@ function launch(job, cfg, args, { readOnly } = {}) {
 # opencode-fleet job ${job.id}
 cd '${job.dir.replace(/'/g, `'\\''`)}' || exit 97
 ${env.join("\n")}
-'${cfg.opencodeBin}' ${quoted} > '${dir0}/events.ndjson' 2> '${dir0}/stderr.log' &
+'${resolveBin(cfg)}' ${quoted} > '${dir0}/events.ndjson' 2> '${dir0}/stderr.log' &
 child=$!
 ( sleep ${Number(job.timeoutSec) || 1200}; kill -TERM $child 2>/dev/null; sleep 5; kill -KILL $child 2>/dev/null; echo timeout > '${dir0}/timeout' ) &
 watcher=$!

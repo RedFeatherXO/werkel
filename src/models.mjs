@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { stateDir, ensureDir, readJson, writeJson, run, globMatch, today } from "./util.mjs";
+import { stateDir, ensureDir, readJson, writeJson, run, globMatch, today, resolveBin } from "./util.mjs";
 import { modelsDevCatalog, lookupModelsDev, providerModels, authenticatedProviders } from "./catalog.mjs";
 
 const CACHE = () => ensureDir(path.join(stateDir(), "cache"));
@@ -27,8 +27,9 @@ export async function openrouterCatalog({ refresh = false, ttlHours = 24 } = {})
     const json = await res.json();
     const out = {};
     for (const m of json.data ?? []) {
-      const p = Number(m.pricing?.prompt ?? NaN) * PER_MTOK;
-      const c = Number(m.pricing?.completion ?? NaN) * PER_MTOK;
+      const r4 = (n) => Math.round(n * 10000) / 10000;
+      const p = r4(Number(m.pricing?.prompt ?? NaN) * PER_MTOK);
+      const c = r4(Number(m.pricing?.completion ?? NaN) * PER_MTOK);
       out[m.id] = {
         prompt: Number.isFinite(p) && p >= 0 ? p : null,
         completion: Number.isFinite(c) && c >= 0 ? c : null,
@@ -48,7 +49,8 @@ export async function openrouterCatalog({ refresh = false, ttlHours = 24 } = {})
 
 /** Models opencode actually has configured, as "provider/model" strings.
  *  Directory matters: a project's opencode.json can define its own providers. */
-export async function installedModels({ bin = "opencode", cwd = process.cwd(), refresh = false, ttlMin = 15 } = {}) {
+export async function installedModels({ bin, cwd = process.cwd(), refresh = false, ttlMin = 15 } = {}) {
+  bin = bin ?? resolveBin(null);
   const key = Buffer.from(cwd).toString("base64url").slice(-40);
   const file = cacheFile(`opencode-models-${key}.json`);
   if (!refresh && fresh(file, ttlMin * 60e3)) {
@@ -69,10 +71,17 @@ export async function installedModels({ bin = "opencode", cwd = process.cwd(), r
  *  resolved project-local providers — one retry turns a false "not configured"
  *  into the real list. */
 export async function installedModelsSmart(cfg, { bin, cwd, refresh = false } = {}) {
-  let list = await installedModels({ bin: bin ?? cfg.opencodeBin, cwd, refresh });
+  bin = bin ?? resolveBin(cfg);
+  let list = await installedModels({ bin, cwd, refresh });
+  // a cold start can answer before opencode has loaded any provider at all
+  if (list.length < 5) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const retry = await installedModels({ bin, cwd, refresh: true });
+    if (retry.length > list.length) list = retry;
+  }
   const wanted = Object.values(cfg.profiles ?? {}).flatMap((p) => p.candidates ?? []);
   if (wanted.length && !wanted.some((m) => list.includes(m))) {
-    const again = await installedModels({ bin: bin ?? cfg.opencodeBin, cwd, refresh: true });
+    const again = await installedModels({ bin, cwd, refresh: true });
     if (again.length > list.length || again.some((m) => wanted.includes(m))) list = again;
   }
   return list;
@@ -149,7 +158,7 @@ export function budgetCheck(ref, cfg, orCatalog, { spentToday = 0, mdCatalog } =
 export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalog, mdCatalog, installed, spentToday = 0 } = {}) {
   orCatalog = orCatalog ?? (await openrouterCatalog().catch(() => ({})));
   mdCatalog = mdCatalog ?? (await modelsDevCatalog().catch(() => ({})));
-  installed = installed ?? (await installedModels({ bin: bin ?? cfg.opencodeBin, cwd }));
+  installed = installed ?? (await installedModels({ bin: bin ?? resolveBin(cfg), cwd }));
   let known = new Set(installed);
   let refreshedOnce = false;
   const rejected = [];
@@ -160,7 +169,7 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
     if (known.has(ref) || known.size === 0) return true;
     if (!refreshedOnce) {
       refreshedOnce = true;
-      const fresh = await installedModels({ bin: bin ?? cfg.opencodeBin, cwd, refresh: true });
+      const fresh = await installedModels({ bin, cwd, refresh: true });
       if (fresh.length) known = new Set(fresh);
     }
     return known.has(ref);
@@ -247,56 +256,103 @@ export function estimateCost(tokens, price) {
 
 // ---- profile suggestions --------------------------------------------------
 
+/**
+ * Ranking a model without benchmarks: name families that are built for coding
+ * score up, names that advertise a small/preview variant score down, and each
+ * tier sorts in the direction that tier actually wants — cheapest first for the
+ * budget tiers, most capable first for the strong ones.
+ */
+const FAMILY_STRONG = /(qwen3(\.\d+)?-coder(-plus|-next)?|glm-5(\.\d+)?|kimi-k[23](\.\d+)?(-code)?|codestral|deepseek-v\d-pro|kat-coder|seed-\d+-code|north-mini-code|devstral|grok-code|minimax-m\d)/i;
+const FAMILY_CODING = /(coder|code|glm|deepseek|qwen|kimi|codestral|mistral|minimax|ling|nemotron|llama|gpt-oss)/i;
+const WEAK_NAME = /(nano|mini|tiny|lite|small|micro|[-_.](0\.\d|[1-9])b\b|preview|experimental|draft|distill)/i;
+const UNSTABLE_ID = /^~|:(batch|extended|thinking)$|latest$/i;
+
+function qualityScore(ref, info) {
+  const name = splitRef(ref).model;      // score the model, not the provider prefix
+  let score = 0;
+  if (FAMILY_STRONG.test(name)) score += 40;
+  else if (FAMILY_CODING.test(name)) score += 15;
+  if (WEAK_NAME.test(name)) score -= 35;
+  if ((info.context ?? 0) >= 1000000) score += 8;
+  else if ((info.context ?? 0) >= 250000) score += 4;
+  if (info.reasoning) score += 3;
+  // price is a weak capability proxy *within* a tier, never across tiers
+  score += Math.min(10, Math.log10(1 + (info.prompt ?? 0) * 10) * 6);
+  return score;
+}
+
+/** "z-ai/glm-5.3-flash" -> "glm", so one family cannot fill a whole profile. */
+function familyOf(ref) {
+  const name = splitRef(ref).model.split("/").pop().toLowerCase();
+  const strong = name.match(FAMILY_STRONG);
+  if (strong) return strong[0].replace(/[\d.]+.*$/, "");
+  return name.replace(/[:@].*$/, "").split(/[-_.]/)[0].replace(/\d+$/, "");
+}
+
 const TIERS = [
-  { name: "free",      max: 0,    description: "Free models — bulk work, zero cost" },
-  { name: "cheap",     max: 0.35, description: "Boilerplate, tests, mechanical refactors" },
-  { name: "balanced",  max: 1.0,  description: "Default worker: features, bug fixes, refactors" },
-  { name: "strong",    max: 3.0,  description: "Tricky logic, cross-file changes, unclear bugs" }
+  { name: "free",     min: 0,     max: 0,   order: "quality", minScore: -10, description: "Free models — bulk work at zero cost" },
+  { name: "cheap",    min: 0.001, max: 0.3, order: "price",   minScore: 10,  description: "Boilerplate, tests, renames, mechanical refactors" },
+  { name: "balanced", min: 0.05,  max: 0.8, order: "quality", minScore: 10,  description: "Default worker: features, bug fixes, medium refactors" },
+  { name: "strong",   min: 0.6,   max: null, order: "quality", minScore: 20, description: "Tricky logic, cross-file changes, unclear bugs" }
 ];
 
-const CODER_HINT = /coder|code|codestral|glm|deepseek|kimi|qwen|devstral|minimax|ling|grok-code|north-mini/i;
-
 /**
- * Build profile candidate lists from the models this machine is actually
- * authenticated for, ranked by "looks like a coding model" then by price.
+ * Build profile candidate lists from the models this machine is authenticated
+ * for. A model may appear in several profiles — that is normal, glm-5.3-flash is
+ * both the cheap workhorse and the long-context one.
  */
-export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minContext = 100000 } = {}) {
+export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minContext = 100000, installedOverride, authOverride } = {}) {
   const orCatalog = await openrouterCatalog({ refresh }).catch(() => ({}));
   const mdCatalog = await modelsDevCatalog({ refresh }).catch(() => ({}));
-  const installed = await installedModelsSmart(cfg, { bin, cwd, refresh });
+  const installed = installedOverride ?? (await installedModelsSmart(cfg, { bin, cwd, refresh }));
 
   // `opencode models` lists providers you have no credentials for; suggesting
-  // those would produce profiles that hang on first use.
-  const auth = new Set(authenticatedProviders({ repo: cwd }));
+  // those would produce profiles that hang or 401 on first use.
+  const auth = new Set(authOverride ?? authenticatedProviders({ repo: cwd }));
   const reachable = auth.size ? installed.filter((ref) => auth.has(splitRef(ref).provider)) : installed;
 
-  const priced = reachable.map((ref) => ({ ref, info: priceInfo(ref, cfg, orCatalog, mdCatalog) }))
-    .filter((r) => r.info.prompt != null && r.info.tools !== false)
+  const ceiling = cfg.budget?.maxPromptUsdPerMTok ?? 1.5;
+  const outCeiling = cfg.budget?.maxCompletionUsdPerMTok ?? 5;
+
+  const priced = reachable
+    .filter((ref) => !UNSTABLE_ID.test(splitRef(ref).model))
+    .map((ref) => ({ ref, info: priceInfo(ref, cfg, orCatalog, mdCatalog) }))
+    .filter((r) => r.info.prompt != null && r.info.completion != null && r.info.tools !== false)
     .filter((r) => (r.info.context ?? 0) >= minContext)
-    .filter((r) => r.info.status !== "deprecated");
+    .filter((r) => r.info.status !== "deprecated")
+    .filter((r) => r.info.prompt <= ceiling && r.info.completion <= outCeiling)
+    .map((r) => ({ ...r, score: qualityScore(r.ref, r.info) }));
+
+  const pickDiverse = (pool, description, limit = 4) => {
+    const picks = [];
+    const seen = new Map();
+    for (const r of pool) {
+      const fam = familyOf(r.ref);
+      if ((seen.get(fam) ?? 0) >= 2) continue;   // at most two of one family
+      seen.set(fam, (seen.get(fam) ?? 0) + 1);
+      picks.push(r.ref);
+      if (picks.length >= limit) break;
+    }
+    return picks.length ? { description, candidates: picks } : null;
+  };
 
   const profiles = {};
-  const seen = new Set();
   for (const tier of TIERS) {
     const pool = priced
-      .filter((r) => r.info.prompt <= tier.max)
-      .filter((r) => tier.name === "free" ? r.info.prompt === 0 : r.info.prompt > 0)
-      .sort((a, b) => {
-        const ac = CODER_HINT.test(a.ref) ? 0 : 1, bc = CODER_HINT.test(b.ref) ? 0 : 1;
-        return ac - bc || a.info.prompt - b.info.prompt || (b.info.context ?? 0) - (a.info.context ?? 0);
-      });
-    const picks = [];
-    for (const r of pool) {
-      if (seen.has(r.ref)) continue;
-      picks.push(r.ref);
-      if (picks.length >= 4) break;
-    }
-    picks.forEach((p) => seen.add(p));
-    if (picks.length) profiles[tier.name] = { description: tier.description, candidates: picks };
+      .filter((r) => r.info.prompt >= tier.min && (tier.max == null || r.info.prompt <= tier.max))
+      .filter((r) => r.score >= tier.minScore)
+      .sort((a, b) => tier.order === "price"
+        // coding-built models first, then genuinely cheapest
+        ? (b.score >= 40) - (a.score >= 40) || a.info.prompt - b.info.prompt
+        : b.score - a.score || a.info.prompt - b.info.prompt);
+    const built = pickDiverse(pool, tier.description);
+    if (built) profiles[tier.name] = built;
   }
 
+  // long context wants reach and a low price, not the priciest model that fits
   const long = priced.filter((r) => (r.info.context ?? 0) >= 500000)
-    .sort((a, b) => a.info.prompt - b.info.prompt).slice(0, 4).map((r) => r.ref);
+    .sort((a, b) => (b.score >= 40) - (a.score >= 40) || a.info.prompt - b.info.prompt)
+    .slice(0, 4).map((r) => r.ref);
   if (long.length) profiles.longcontext = { description: "Jobs that must read a lot at once (500k+ context)", candidates: long };
 
   return {

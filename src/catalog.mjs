@@ -30,10 +30,11 @@ export async function modelsDevCatalog({ refresh = false, ttlHours = 24 } = {}) 
     for (const [provider, pdata] of Object.entries(raw)) {
       const models = {};
       for (const [id, m] of Object.entries(pdata?.models ?? {})) {
+        const r4 = (n) => (typeof n === "number" ? Math.round(n * 10000) / 10000 : null);
         models[id] = {
-          prompt: typeof m.cost?.input === "number" ? m.cost.input : null,
-          completion: typeof m.cost?.output === "number" ? m.cost.output : null,
-          cacheRead: typeof m.cost?.cache_read === "number" ? m.cost.cache_read : null,
+          prompt: r4(m.cost?.input),
+          completion: r4(m.cost?.output),
+          cacheRead: r4(m.cost?.cache_read),
           context: m.limit?.context ?? null,
           tools: m.tool_call === true,
           reasoning: m.reasoning === true,
