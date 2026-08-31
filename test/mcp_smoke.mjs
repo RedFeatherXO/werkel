@@ -40,13 +40,42 @@ const TEST_HOME = "/tmp/opencode-fleet-teststate";
 const TEST_ENV = { ...process.env, OPENCODE_FLEET_HOME: TEST_HOME };
 
 // start the mock model server ourselves so the suite is self-contained
-const mock = spawn("python3", [path.join(ROOT, "test/mock_llm.py")], { stdio: "ignore", detached: false });
+const MOCK_LOG = path.join(TEST_HOME, "mock.log");
+const mockLogFd = (await import("node:fs")).openSync(MOCK_LOG, "a");
+const mock = spawn("python3", [path.join(ROOT, "test/mock_llm.py")], {
+  stdio: ["ignore", mockLogFd, mockLogFd], detached: false
+});
+const showMockLog = async (label) => {
+  try {
+    const txt = (await import("node:fs")).readFileSync(MOCK_LOG, "utf8").trim();
+    if (txt) console.log(`      [mock ${label}] ${txt.split("\n").slice(-8).join("\n      ")}`);
+  } catch {}
+};
 const upBy = Date.now() + 15000;
 for (;;) {
   try { const r = await fetch("http://127.0.0.1:8099/v1/models"); if (r.ok) break; } catch {}
-  if (Date.now() > upBy) { console.error("mock model server did not start (port 8099 in use?)"); process.exit(1); }
+  if (Date.now() > upBy) {
+    console.error("mock model server did not start (port 8099 in use?)");
+    await showMockLog("startup");
+    process.exit(1);
+  }
   await new Promise((r) => setTimeout(r, 300));
 }
+// answering /v1/models is not proof it can complete a chat response
+{
+  const probe = await fetch("http://127.0.0.1:8099/v1/chat/completions", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mock-coder", stream: true, messages: [{ role: "user", content: "ping" }] })
+  });
+  const text = await probe.text();
+  if (!probe.ok || !text.includes("data: [DONE]")) {
+    console.error("mock model server answers but cannot complete a chat stream:", probe.status, text.slice(0, 300));
+    await showMockLog("probe");
+    try { mock.kill(); } catch {}
+    process.exit(1);
+  }
+}
+
 const shutdown = () => { try { mock.kill(); } catch {} };
 process.on("exit", shutdown); process.on("SIGINT", () => { shutdown(); process.exit(1); });
 
@@ -133,6 +162,7 @@ const warmState = warmDone.done?.[0]?.state;
 ok("mock provider starts", warmState === "done", warmState ?? "no result");
 if (warmState !== "done") {
   await explainFailure(warm.jobId);
+  await showMockLog("warmup");
   console.log("\n  The mock provider could not run — everything below would fail for that reason.");
   console.log("  Usually: opencode is still installing @ai-sdk/openai-compatible, or port 8099 is taken.\n");
   srv.kill(); shutdown();
@@ -150,7 +180,7 @@ ok("separate worktrees", a.worktree.path !== b.worktree.path);
 const waited = await call("fleet_wait", { jobIds: [a.jobId, b.jobId], timeoutSec: 300 });
 const bothDone = waited.done?.length === 2 && waited.done.every(j => j.state === "done");
 ok("both finished", bothDone, JSON.stringify(waited.done?.map(j => j.state)));
-if (!bothDone) { await explainFailure(a.jobId); await explainFailure(b.jobId); }
+if (!bothDone) { await explainFailure(a.jobId); await explainFailure(b.jobId); await showMockLog("jobs"); }
 
 const res = await call("fleet_result", { jobId: a.jobId });
 ok("result has report", !!res.report, res.report?.slice(0, 50));

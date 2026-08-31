@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Minimal OpenAI-compatible mock so we can exercise opencode end-to-end for free."""
-import json, time, os, sys, re
+import json, time, os, sys, re, traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOG = "/home/claude/lab/mock_requests.log"
@@ -9,17 +9,43 @@ def sse(obj):
     return ("data: " + json.dumps(obj) + "\n\n").encode()
 
 class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"   # without this the response ends by closing the
+                                    # socket, which strict HTTP clients call an error
     def log_message(self, *a): pass
+
+    def _send(self, body, ctype):
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_GET(self):
         if self.path.startswith("/v1/models"):
-            body = json.dumps({"object":"list","data":[{"id":"mock-coder","object":"model","owned_by":"mock"}]}).encode()
-            self.send_response(200); self.send_header("Content-Type","application/json")
-            self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
+            self._send(json.dumps({"object":"list","data":[{"id":"mock-coder","object":"model","owned_by":"mock"}]}).encode(),
+                       "application/json")
         else:
-            self.send_response(404); self.end_headers()
+            self.send_response(404); self.send_header("Content-Length","0"); self.end_headers()
 
     def do_POST(self):
+        try:
+            self._handle_post()
+        except Exception:
+            tb = traceback.format_exc()
+            sys.stderr.write("mock_llm crashed handling %s:\n%s\n" % (self.path, tb))
+            sys.stderr.flush()
+            try:
+                self._send(json.dumps({"error": {"message": tb[-500:], "type": "mock_crash"}}).encode(),
+                           "application/json")
+            except Exception:
+                pass
+
+    def _handle_post(self):
         n = int(self.headers.get("Content-Length","0"))
         raw = self.rfile.read(n)
         try: req = json.loads(raw)
@@ -56,19 +82,19 @@ class H(BaseHTTPRequestHandler):
         chunks.append({**base,"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":80,"total_tokens":1280}})
 
         if req.get("stream"):
-            self.send_response(200)
-            self.send_header("Content-Type","text/event-stream")
-            self.send_header("Cache-Control","no-cache"); self.end_headers()
-            for c in chunks:
-                self.wfile.write(sse(c)); self.wfile.flush(); time.sleep(0.02)
-            self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush()
+            # send the whole event stream as one sized body — the harness tests the
+            # fleet, not incremental delivery, and this cannot be mistaken for a
+            # dropped connection
+            body = b"".join(sse(c) for c in chunks) + b"data: [DONE]\n\n"
+            self._send(body, "text/event-stream")
         else:
             msg = {"role":"assistant","content":"DONE: mock reply"}
-            body = json.dumps({"id":cid,"object":"chat.completion","created":int(time.time()),
+            self._send(json.dumps({"id":cid,"object":"chat.completion","created":int(time.time()),
                 "model":req.get("model"),"choices":[{"index":0,"message":msg,"finish_reason":"stop"}],
-                "usage":{"prompt_tokens":1200,"completion_tokens":80,"total_tokens":1280}}).encode()
-            self.send_response(200); self.send_header("Content-Type","application/json")
-            self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
+                "usage":{"prompt_tokens":1200,"completion_tokens":80,"total_tokens":1280}}).encode(),
+                "application/json")
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", 8099), H).serve_forever()
+    srv = ThreadingHTTPServer(("127.0.0.1", 8099), H)
+    srv.daemon_threads = True
+    srv.serve_forever()
