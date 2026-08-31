@@ -5,6 +5,9 @@ import { modelsDevCatalog, lookupModelsDev, providerModels, authenticatedProvide
 
 const CACHE = () => ensureDir(path.join(stateDir(), "cache"));
 const OR_URL = "https://openrouter.ai/api/v1/models";
+// Bump when the shape of a cached entry changes, so old caches are refetched
+// instead of silently serving records without the new fields.
+const CATALOG_SCHEMA = 2;
 
 const PER_MTOK = 1_000_000;
 
@@ -19,7 +22,7 @@ export async function openrouterCatalog({ refresh = false, ttlHours = 24 } = {})
   const file = cacheFile("openrouter.json");
   if (!refresh && fresh(file, ttlHours * 3600e3)) {
     const cached = readJson(file);
-    if (cached) return cached;
+    if (cached && cached._schema === CATALOG_SCHEMA) return cached.models;
   }
   try {
     const res = await fetch(OR_URL, { headers: { "user-agent": "opencode-fleet" } });
@@ -48,11 +51,11 @@ export async function openrouterCatalog({ refresh = false, ttlHours = 24 } = {})
         elo: arena.length ? Math.round(Math.max(...arena.map((a) => a.elo))) : null
       };
     }
-    writeJson(file, out);
+    writeJson(file, { _schema: CATALOG_SCHEMA, fetchedAt: new Date().toISOString(), models: out });
     return out;
   } catch (e) {
     const stale = readJson(file);
-    if (stale) return stale;
+    if (stale?.models) return stale.models;
     throw new Error(`could not load OpenRouter catalogue (${e.message}) and no cache available`);
   }
 }
@@ -398,7 +401,16 @@ export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minConte
       .sort((a, b) => tier.order === "value"
         ? b.value - a.value || b.score - a.score
         : b.score - a.score || a.info.prompt - b.info.prompt);
-    const built = pickDiverse(pool, tier.description);
+    let built = pickDiverse(pool, tier.description);
+    if (!built) {
+      // Nothing cleared the capability floor — usually because no model in this
+      // price band has published benchmarks. Take the best of the band anyway
+      // rather than handing back a profile that routes nowhere.
+      const relaxed = priced
+        .filter((r) => r.info.prompt >= tier.min && (tier.max == null || r.info.prompt <= tier.max))
+        .sort((a, b) => b.score - a.score || a.info.prompt - b.info.prompt);
+      built = pickDiverse(relaxed, `${tier.description} (no benchmarked model clears this tier — best available)`);
+    }
     if (built) profiles[tier.name] = built;
   }
 

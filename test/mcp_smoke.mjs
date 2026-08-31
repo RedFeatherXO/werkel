@@ -236,6 +236,16 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
   const cfg = { ...(await import(path.join(ROOT, "src/config.mjs"))).DEFAULTS };
   const sug = await M.suggestProfiles(cfg, { cwd: "/tmp", installedOverride: inv, authOverride: ["openrouter", "opencode"] });
   const names = (t) => (sug.profiles[t]?.candidates ?? []).join(" ");
+  // a cache written before a schema change must not silently serve old records
+  {
+    const fsx = await import("node:fs");
+    const cf = path.join(TEST_HOME, "cache", "openrouter.json");
+    fsx.mkdirSync(path.dirname(cf), { recursive: true });
+    fsx.writeFileSync(cf, JSON.stringify({ "z-ai/glm-5.3-flash": { prompt: 0.075, completion: 0.25, context: 1310720, tools: true } }));
+    const refetched = await M.openrouterCatalog();
+    ok("stale catalogue cache self-heals", refetched["z-ai/glm-5.3-flash"]?.coding != null,
+       `coding=${refetched["z-ai/glm-5.3-flash"]?.coding}`);
+  }
   ok("suggest: all tiers filled", ["free","cheap","balanced","strong","longcontext"].every(t => sug.profiles[t]?.candidates?.length),
      Object.keys(sug.profiles).join(","));
   const weakest = (t, floor) => (sug.profiles[t]?.candidates ?? [])
