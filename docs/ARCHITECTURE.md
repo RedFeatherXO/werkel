@@ -6,7 +6,8 @@
 |---|---|
 | `src/mcp.mjs` | MCP stdio server: JSON-RPC framing, tool schemas, dispatch. No SDK, no dependencies. |
 | `src/jobs.mjs` | Job lifecycle: spawn detached, parse the event stream, refresh state, wait, cancel, follow up. |
-| `src/models.mjs` | Model catalogue, price lookup, budget guard, profile resolution, spend log. |
+| `src/models.mjs` | Price lookup, budget guard, profile resolution, suggestions, spend log. |
+| `src/catalog.mjs` | models.dev catalogue (prices/context/tool support for every provider) and which providers hold credentials. |
 | `src/worktree.mjs` | git worktree per job, auto-commit, diff extraction, merge/squash/patch, cleanup. |
 | `src/prompt.mjs` | Turns a delegation into a structured work order for a model that has never seen the repo. |
 | `src/doctor.mjs` | Setup diagnosis: binaries, providers, profiles, budget, stale jobs, optional warmup run. |
@@ -65,7 +66,17 @@ landing the work into an ordinary merge.
 
 **Unpriced means refused.**
 A model whose price cannot be established fails the guard instead of running. Anything else
-would make the daily limit a suggestion. Local models are priced at zero in `staticPricing`.
+would make the daily limit a suggestion. Prices resolve in this order: `staticPricing`
+override → live OpenRouter API → models.dev (which opencode itself resolves against, so ids
+match and all 200+ providers are covered) → refuse. Local models are priced at zero in
+`staticPricing`.
+
+**Suggestions only name providers you can reach.**
+`opencode models` happily lists Bedrock and Copilot models on a machine with no such
+credentials; a profile built from that list would hang on first use. `ocfleet suggest`
+therefore intersects the model list with the providers found in opencode's auth store, your
+opencode config, and the usual API-key environment variables — reading provider names only,
+never secrets.
 
 **Isolation is what makes `--auto` acceptable.**
 Workers auto-approve their own permissions, which would be reckless in your working tree and

@@ -12,8 +12,8 @@
 
   "budget": {
     "_comment": "The guard every delegation passes. Lower the two ceilings to make the fleet cheaper; raise maxDailyUsd carefully.",
-    "maxPromptUsdPerMTok": 1.0,
-    "maxCompletionUsdPerMTok": 4.0,
+    "maxPromptUsdPerMTok": 1.5,
+    "maxCompletionUsdPerMTok": 5.0,
     "maxJobUsd": 0.75,
     "maxDailyUsd": 10.0,
     "requireToolSupport": true,
@@ -23,37 +23,47 @@
     "deny": ["*gpt-5*", "*claude*", "*gemini*-pro*", "*opus*"]
   },
 
+  "_profiles_hint": "`ocfleet suggest --write` regenerates these from the providers you are authenticated for.",
   "profiles": {
+    "free": {
+      "description": "Free models — bulk work at zero cost",
+      "candidates": [
+        "openrouter/z-ai/glm-5.2:free",
+        "opencode/glm-4.7-free",
+        "opencode/north-mini-code-free"
+      ]
+    },
     "cheap": {
       "description": "Boilerplate, tests, renames, mechanical refactors",
       "candidates": [
-        "openrouter/qwen/qwen3-coder-30b-a3b-instruct",
-        "openrouter/z-ai/glm-4.7-flash",
-        "openrouter/deepseek/deepseek-v4-flash"
+        "openrouter/z-ai/glm-5.3-flash",
+        "opencode/deepseek-v4-flash",
+        "openrouter/qwen/qwen3-coder-30b-a3b-instruct"
       ]
     },
     "balanced": {
       "description": "Default worker: features, bug fixes, medium refactors",
       "candidates": [
+        "openrouter/z-ai/glm-5.3-flash",
         "openrouter/qwen/qwen3-coder",
-        "openrouter/qwen/qwen3-coder-next",
-        "openrouter/mistralai/codestral-2508",
-        "zai/glm-4.7"
+        "openrouter/z-ai/glm-5",
+        "opencode/glm-4.7"
       ]
     },
     "strong": {
       "description": "Tricky logic, cross-file changes, unclear bugs",
       "candidates": [
+        "openrouter/z-ai/glm-5.3",
         "openrouter/qwen/qwen3-coder-plus",
-        "openrouter/moonshotai/kimi-k2.7-code",
-        "openrouter/z-ai/glm-5.3"
+        "opencode/kimi-k2.7-code"
       ]
     },
     "longcontext": {
-      "description": "Jobs that must read a lot of files at once",
+      "description": "Jobs that must read a lot at once (1M+ context)",
       "candidates": [
-        "openrouter/deepseek/deepseek-v4-flash",
-        "openrouter/qwen/qwen3.7-flash"
+        "openrouter/z-ai/glm-5.3-flash",
+        "opencode/nemotron-3-ultra-free",
+        "opencode/deepseek-v4-flash"
       ]
     },
     "local": {
@@ -63,7 +73,7 @@
   },
 
   "staticPricing": {
-    "_comment": "Prices for providers that are not on OpenRouter. Without an entry the model counts as unpriced and is refused.",
+    "_comment": "Overrides only. Prices normally come from models.dev (all providers opencode knows) and the live OpenRouter catalogue. An entry here wins over both.",
     "zai/glm-4.7": { "prompt": 0.60, "completion": 2.20, "context": 200000, "tools": true },
     "deepseek/deepseek-chat": { "prompt": 0.28, "completion": 0.42, "context": 128000, "tools": true },
     "ollama/*": { "prompt": 0, "completion": 0, "context": 128000, "tools": true }

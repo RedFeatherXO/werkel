@@ -35,6 +35,10 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
     out.info.installedModelCount = installed.length;
     if (!installed.length) fail("opencode reports no models", "run: opencode auth login (pick openrouter / zai / deepseek)");
   }
+  const authProviders = (await import("./catalog.mjs")).authenticatedProviders({ repo });
+  out.info.authenticatedProviders = authProviders.length ? authProviders : "none found (run: opencode auth login)";
+  if (!authProviders.length) warn("no provider credentials found — every delegation will fail until you run `opencode auth login`");
+
   let orCatalog = {};
   try { orCatalog = await openrouterCatalog(); out.info.openrouterCatalogue = Object.keys(orCatalog).length + " models"; }
   catch (e) { warn(`OpenRouter price catalogue unavailable: ${e.message} — prices for openrouter/* cannot be checked`); }
@@ -49,7 +53,10 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
     });
     const usable = rows.find((r) => r.available && r.allowed);
     out.info.profiles[name] = { usable: usable?.model ?? null, candidates: rows };
-    if (!usable) warn(`profile "${name}" has no usable model — configure a provider or adjust budget/candidates`);
+    // only nag about profiles you would actually hit
+    if (!usable && (name === cfg.defaults.profile || ["cheap", "balanced", "strong"].includes(name))) {
+      warn(`profile "${name}" has no usable model — configure a provider or run \`ocfleet suggest --write\``);
+    }
   }
   if (!Object.values(out.info.profiles).some((p) => p.usable)) {
     fail("no profile can route anywhere", "opencode auth login, then `ocfleet models` to see what is allowed");
@@ -70,12 +77,25 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
 
   // 6. warm up provider packages (first real run downloads npm packages and can look like a hang)
   if (warmup && bin) {
-    const model = Object.values(out.info.profiles).map((p) => p.usable).find(Boolean);
+    const model = out.info.profiles[cfg.defaults.profile]?.usable
+      ?? Object.values(out.info.profiles).map((p) => p.usable).find(Boolean);
     if (model) {
       const t0 = Date.now();
-      const r = await run(cfg.opencodeBin, ["run", "--format", "json", "--model", model, "reply with the single word: ready"], { timeout: 240000, cwd: repo });
-      out.info.warmup = { model, duration: humanDuration(Date.now() - t0), ok: r.ok, output: (r.stdout || r.stderr).slice(-300) };
-      if (!r.ok) warn("warmup run failed — check credentials for " + model);
+      // --print-logs so a failure says *why*; the first run of a new provider
+      // downloads its npm package and can legitimately take minutes.
+      const r = await run(cfg.opencodeBin,
+        ["run", "--print-logs", "--log-level", "INFO", "--model", model, "reply with the single word: ready"],
+        { timeout: 600000, cwd: repo });
+      const tail = (r.stderr || "").trim().split("\n").slice(-6).join("\n");
+      out.info.warmup = {
+        model, duration: humanDuration(Date.now() - t0), ok: r.ok,
+        output: (r.stdout || "").trim().slice(-200) || undefined,
+        lastLogLines: r.ok ? undefined : tail || "(no output — opencode hung before logging)"
+      };
+      if (!r.ok) {
+        warn(`warmup with ${model} did not finish. If the log ends at package resolution it was just slow — run doctor --warmup again. ` +
+             `A 401/402 means the provider key or credit is the problem.`);
+      }
     } else out.info.warmup = "skipped, no usable model";
   }
 

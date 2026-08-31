@@ -25,8 +25,8 @@ export const DEFAULTS = {
   },
 
   budget: {
-    maxPromptUsdPerMTok: 1.0,     // hard ceiling: input price
-    maxCompletionUsdPerMTok: 4.0, // hard ceiling: output price
+    maxPromptUsdPerMTok: 1.5,     // hard ceiling: input price
+    maxCompletionUsdPerMTok: 5.0, // hard ceiling: output price
     maxJobUsd: 0.75,              // abort/flag a single job above this
     maxDailyUsd: 10.0,            // refuse new jobs once today's spend crosses this
     requireToolSupport: true,     // a worker without tool calling cannot edit files
@@ -38,41 +38,54 @@ export const DEFAULTS = {
 
   // Ordered candidates. First one that exists in `opencode models` AND passes the
   // budget guard wins. Add your own; these are only sane starting points.
+  // Ordered candidates. First one that is affordable and reachable wins.
+  // `ocfleet suggest --write` rewrites this from the providers you are actually
+  // authenticated for — much better than these generic defaults.
   profiles: {
-    cheap: {
-      description: "Boilerplate, tests, renames, mechanical refactors, doc strings",
+    free: {
+      description: "Free models — bulk work at zero cost",
       candidates: [
+        "openrouter/z-ai/glm-5.2:free",
+        "opencode/glm-4.7-free",
+        "opencode/north-mini-code-free",
+        "opencode/deepseek-v4-flash-free"
+      ]
+    },
+    cheap: {
+      description: "Boilerplate, tests, renames, mechanical refactors",
+      candidates: [
+        "openrouter/z-ai/glm-5.3-flash",
+        "opencode/deepseek-v4-flash",
         "openrouter/qwen/qwen3-coder-30b-a3b-instruct",
-        "openrouter/z-ai/glm-4.7-flash",
-        "openrouter/deepseek/deepseek-v4-flash",
-        "openrouter/mistralai/mistral-small-3.2-24b-instruct"
+        "openrouter/deepseek/deepseek-v4-flash"
       ]
     },
     balanced: {
       description: "Default worker: feature work, bug fixes, medium refactors",
       candidates: [
+        "openrouter/z-ai/glm-5.3-flash",
         "openrouter/qwen/qwen3-coder",
-        "openrouter/qwen/qwen3-coder-next",
-        "openrouter/mistralai/codestral-2508",
-        "openrouter/kwaipilot/kat-coder-pro-v2",
-        "zai/glm-4.7"
+        "openrouter/z-ai/glm-5",
+        "opencode/glm-4.7",
+        "openrouter/mistralai/codestral-2508"
       ]
     },
     strong: {
       description: "Tricky logic, cross-file changes, debugging with unclear cause",
       candidates: [
-        "openrouter/qwen/qwen3-coder-plus",
-        "openrouter/moonshotai/kimi-k2.7-code",
         "openrouter/z-ai/glm-5.3",
-        "deepseek/deepseek-chat"
+        "openrouter/qwen/qwen3-coder-plus",
+        "opencode/kimi-k2.7-code",
+        "openrouter/moonshotai/kimi-k2.7-code"
       ]
     },
     longcontext: {
-      description: "Jobs that must read a lot of files at once",
+      description: "Jobs that must read a lot of files at once (1M+ context)",
       candidates: [
-        "openrouter/deepseek/deepseek-v4-flash",
-        "openrouter/qwen/qwen3.7-flash",
-        "openrouter/z-ai/glm-5.3-flash"
+        "openrouter/z-ai/glm-5.3-flash",
+        "opencode/nemotron-3-ultra-free",
+        "opencode/deepseek-v4-flash",
+        "openrouter/deepseek/deepseek-v4-flash"
       ]
     },
     local: {
@@ -81,8 +94,9 @@ export const DEFAULTS = {
     }
   },
 
-  // Prices for providers that are not on OpenRouter (USD per 1M tokens).
-  // Without an entry here, a non-OpenRouter model is treated as unpriced.
+  // Price overrides. Prices normally come from models.dev (every provider
+  // opencode knows) and the live OpenRouter catalogue; entries here win over both
+  // and cover anything neither knows, such as a local endpoint.
   staticPricing: {
     "zai/glm-4.7": { prompt: 0.60, completion: 2.20, context: 200000, tools: true },
     "zai/glm-4.7-flash": { prompt: 0.06, completion: 0.40, context: 200000, tools: true },

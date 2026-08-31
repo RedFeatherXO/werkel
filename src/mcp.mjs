@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
-import { allowedModels, spentToday, openrouterCatalog, installedModels } from "./models.mjs";
+import { allowedModels, spentToday, suggestProfiles } from "./models.mjs";
 import * as J from "./jobs.mjs";
 import { applyJob, removeWorktree, diffSummary } from "./worktree.mjs";
 import { doctor } from "./doctor.mjs";
@@ -195,6 +195,7 @@ async function callTool(name, a = {}) {
         profiles: Object.fromEntries(Object.entries(cfg.profiles).map(([k, v]) => [k, { description: v.description, candidates: v.candidates }])),
         allowed: allowed.map(view),
         blocked: a.all ? rows.filter((r) => !r.allowed).map(view) : `${rows.length - allowed.length} models blocked (pass all:true to see them)`,
+        suggestedProfiles: a.suggest ? (await suggestProfiles(cfg, { cwd: a.repo ?? process.cwd() })).profiles : undefined,
         spentTodayUsd: Number((spentToday().total ?? 0).toFixed(4))
       };
     }

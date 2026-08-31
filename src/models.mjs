@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { stateDir, ensureDir, readJson, writeJson, run, globMatch, today } from "./util.mjs";
+import { modelsDevCatalog, lookupModelsDev, providerModels, authenticatedProviders } from "./catalog.mjs";
 
 const CACHE = () => ensureDir(path.join(stateDir(), "cache"));
 const OR_URL = "https://openrouter.ai/api/v1/models";
@@ -91,23 +92,29 @@ function staticLookup(cfg, ref) {
   return null;
 }
 
-/** Price + capability lookup for a "provider/model" reference. */
-export function priceInfo(ref, cfg, orCatalog) {
+/** Price + capability lookup for a "provider/model" reference.
+ *  Order: explicit staticPricing → live OpenRouter API → models.dev (every other
+ *  provider opencode can reach) → unknown (which the guard refuses). */
+export function priceInfo(ref, cfg, orCatalog, mdCatalog) {
   const { provider, model } = splitRef(ref);
-  if (provider === "openrouter" && orCatalog?.[model]) {
-    return { ...orCatalog[model], source: "openrouter" };
-  }
+
   const s = staticLookup(cfg, ref);
   if (s) return { prompt: s.prompt, completion: s.completion, context: s.context ?? null, tools: s.tools !== false, source: s.source, note: s.note };
-  // A bare vendor/model that also exists on OpenRouter is a decent price proxy.
+
+  if (provider === "openrouter" && orCatalog?.[model]) return { ...orCatalog[model], source: "openrouter" };
+
+  const md = lookupModelsDev(mdCatalog, provider, model);
+  if (md) return md;
+
   if (orCatalog?.[ref]) return { ...orCatalog[ref], source: "openrouter:proxy" };
+  if (provider === "openrouter" && mdCatalog?.openrouter?.[model]) return { ...mdCatalog.openrouter[model], source: "models.dev" };
   return { prompt: null, completion: null, context: null, tools: null, source: "unknown" };
 }
 
 /** The gate every delegation passes through. */
-export function budgetCheck(ref, cfg, orCatalog, { spentToday = 0 } = {}) {
+export function budgetCheck(ref, cfg, orCatalog, { spentToday = 0, mdCatalog } = {}) {
   const b = cfg.budget ?? {};
-  const info = priceInfo(ref, cfg, orCatalog);
+  const info = priceInfo(ref, cfg, orCatalog, mdCatalog);
   const allowlisted = (b.allow ?? []).some((p) => globMatch(p, ref));
 
   const deny = (b.deny ?? []).find((p) => globMatch(p, ref));
@@ -139,8 +146,9 @@ export function budgetCheck(ref, cfg, orCatalog, { spentToday = 0 } = {}) {
 }
 
 /** Pick a concrete model for an explicit ref or a profile name. */
-export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalog, installed, spentToday = 0 } = {}) {
+export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalog, mdCatalog, installed, spentToday = 0 } = {}) {
   orCatalog = orCatalog ?? (await openrouterCatalog().catch(() => ({})));
+  mdCatalog = mdCatalog ?? (await modelsDevCatalog().catch(() => ({})));
   installed = installed ?? (await installedModels({ bin: bin ?? cfg.opencodeBin, cwd }));
   let known = new Set(installed);
   let refreshedOnce = false;
@@ -159,7 +167,7 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
   };
 
   const budgetOk = (ref) => {
-    const chk = budgetCheck(ref, cfg, orCatalog, { spentToday });
+    const chk = budgetCheck(ref, cfg, orCatalog, { spentToday, mdCatalog });
     if (!chk.allowed) { rejected.push({ ref, reason: chk.reason, budgetStop: chk.budgetStop }); return null; }
     return chk;
   };
@@ -202,10 +210,11 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
 /** Every installed model that passes the guard, cheapest first. */
 export async function allowedModels(cfg, { bin, cwd, refresh = false } = {}) {
   const orCatalog = await openrouterCatalog({ refresh }).catch(() => ({}));
+  const mdCatalog = await modelsDevCatalog({ refresh }).catch(() => ({}));
   const installed = await installedModelsSmart(cfg, { bin, cwd, refresh });
   const rows = [];
   for (const ref of installed) {
-    const chk = budgetCheck(ref, cfg, orCatalog, {});
+    const chk = budgetCheck(ref, cfg, orCatalog, { mdCatalog });
     rows.push({ model: ref, allowed: chk.allowed, reason: chk.reason, ...chk.info });
   }
   rows.sort((a, b) => (a.prompt ?? 1e9) - (b.prompt ?? 1e9));
@@ -235,3 +244,68 @@ export function estimateCost(tokens, price) {
   const outTok = tokens?.output ?? 0;
   return (inTok / PER_MTOK) * price.prompt + (outTok / PER_MTOK) * price.completion;
 }
+
+// ---- profile suggestions --------------------------------------------------
+
+const TIERS = [
+  { name: "free",      max: 0,    description: "Free models — bulk work, zero cost" },
+  { name: "cheap",     max: 0.35, description: "Boilerplate, tests, mechanical refactors" },
+  { name: "balanced",  max: 1.0,  description: "Default worker: features, bug fixes, refactors" },
+  { name: "strong",    max: 3.0,  description: "Tricky logic, cross-file changes, unclear bugs" }
+];
+
+const CODER_HINT = /coder|code|codestral|glm|deepseek|kimi|qwen|devstral|minimax|ling|grok-code|north-mini/i;
+
+/**
+ * Build profile candidate lists from the models this machine is actually
+ * authenticated for, ranked by "looks like a coding model" then by price.
+ */
+export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minContext = 100000 } = {}) {
+  const orCatalog = await openrouterCatalog({ refresh }).catch(() => ({}));
+  const mdCatalog = await modelsDevCatalog({ refresh }).catch(() => ({}));
+  const installed = await installedModelsSmart(cfg, { bin, cwd, refresh });
+
+  // `opencode models` lists providers you have no credentials for; suggesting
+  // those would produce profiles that hang on first use.
+  const auth = new Set(authenticatedProviders({ repo: cwd }));
+  const reachable = auth.size ? installed.filter((ref) => auth.has(splitRef(ref).provider)) : installed;
+
+  const priced = reachable.map((ref) => ({ ref, info: priceInfo(ref, cfg, orCatalog, mdCatalog) }))
+    .filter((r) => r.info.prompt != null && r.info.tools !== false)
+    .filter((r) => (r.info.context ?? 0) >= minContext)
+    .filter((r) => r.info.status !== "deprecated");
+
+  const profiles = {};
+  const seen = new Set();
+  for (const tier of TIERS) {
+    const pool = priced
+      .filter((r) => r.info.prompt <= tier.max)
+      .filter((r) => tier.name === "free" ? r.info.prompt === 0 : r.info.prompt > 0)
+      .sort((a, b) => {
+        const ac = CODER_HINT.test(a.ref) ? 0 : 1, bc = CODER_HINT.test(b.ref) ? 0 : 1;
+        return ac - bc || a.info.prompt - b.info.prompt || (b.info.context ?? 0) - (a.info.context ?? 0);
+      });
+    const picks = [];
+    for (const r of pool) {
+      if (seen.has(r.ref)) continue;
+      picks.push(r.ref);
+      if (picks.length >= 4) break;
+    }
+    picks.forEach((p) => seen.add(p));
+    if (picks.length) profiles[tier.name] = { description: tier.description, candidates: picks };
+  }
+
+  const long = priced.filter((r) => (r.info.context ?? 0) >= 500000)
+    .sort((a, b) => a.info.prompt - b.info.prompt).slice(0, 4).map((r) => r.ref);
+  if (long.length) profiles.longcontext = { description: "Jobs that must read a lot at once (500k+ context)", candidates: long };
+
+  return {
+    profiles,
+    authenticatedProviders: [...auth],
+    considered: priced.length,
+    installed: installed.length,
+    note: priced.length ? undefined : "no priced, tool-capable model found — is a provider authenticated? (opencode auth login)"
+  };
+}
+
+export { modelsDevCatalog, providerModels, authenticatedProviders };

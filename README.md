@@ -59,6 +59,7 @@ Claude then drives the tools itself. From a shell the same engine is available:
 
 ```bash
 ocfleet models                       # what you can route to, with prices
+ocfleet suggest --write              # build profiles from your authenticated providers
 ocfleet delegate "Wrap every fetch in src/api/*.ts in withRetry" \
    --repo . --profile cheap \
    --context "withRetry lives in src/lib/retry.ts and takes (fn, opts)" \
@@ -82,7 +83,7 @@ ocfleet cleanup <jobId>
 | `fleet_followup` | Send review feedback into the same session/worktree |
 | `fleet_apply` | merge / squash / write a .patch |
 | `fleet_cancel`, `fleet_cleanup` | Kill a job, remove worktree + branch |
-| `fleet_models` | Routable models with prices and guard verdicts |
+| `fleet_models` | Routable models with prices and guard verdicts (`suggest:true` proposes profiles) |
 | `fleet_doctor` | Binaries, providers, profiles, budget, stuck jobs |
 
 ## Configuration
@@ -107,10 +108,23 @@ Start from [`config/fleet.config.example.json`](config/fleet.config.example.json
 }
 ```
 
-Prices for `openrouter/*` come from OpenRouter's public catalogue (cached 24 h). Other
-providers need an entry in `staticPricing` — an unpriced model is refused rather than
-silently billed. Provider setup for OpenCode itself:
+Prices come from [models.dev](https://models.dev) — the same catalogue OpenCode resolves
+models against, so every provider it can reach is covered (OpenCode Zen, Z.ai, DeepSeek,
+OpenRouter, …) — plus OpenRouter's live API for `openrouter/*`, both cached 24 h. Entries in
+`staticPricing` override both. A model whose price cannot be established is refused rather
+than silently billed. Provider setup for OpenCode itself:
 [`config/opencode.providers.example.json`](config/opencode.providers.example.json).
+
+Don't hand-write candidate lists — generate them from what you actually have:
+
+```bash
+ocfleet suggest           # show proposed profiles, ranked by price and coding fitness
+ocfleet suggest --write   # write them into ~/.opencode-fleet/fleet.config.json (keeps a .bak)
+```
+
+It only proposes models from providers you hold credentials for (read from opencode's
+auth store and your config — keys are never read, only provider names), so a suggested
+profile cannot point at a provider that would hang on first use.
 
 A profile resolves to the first candidate that is both affordable and reachable. If none is
 listed by `opencode models` (which can lag right after adding a provider) the first

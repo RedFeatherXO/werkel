@@ -7,7 +7,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadConfig, DEFAULTS } from "../src/config.mjs";
-import { allowedModels, spentToday } from "../src/models.mjs";
+import { allowedModels, spentToday, suggestProfiles } from "../src/models.mjs";
 import * as J from "../src/jobs.mjs";
 import { applyJob, removeWorktree, diffSummary } from "../src/worktree.mjs";
 import { doctor } from "../src/doctor.mjs";
@@ -147,6 +147,32 @@ const cmds = {
     }
   },
 
+  async suggest(a) {
+    const repo = path.resolve(a.flags.repo ?? process.cwd());
+    const cfg = loadConfig(repo);
+    const r = await suggestProfiles(cfg, { cwd: repo, refresh: !!a.flags.refresh });
+    if (a.flags.json) return jsonOut(r);
+    if (r.note) { p(`\n  ${r.note}\n`); return; }
+    p(`\n  ${r.considered} priced, tool-capable models out of ${r.installed} configured\n`);
+    for (const [name, prof] of Object.entries(r.profiles)) {
+      p(`  ${name.padEnd(12)} ${prof.description}`);
+      for (const c of prof.candidates) p(`      ${c}`);
+    }
+    if (!a.flags.write) {
+      p(`\n  add to your fleet.config.json:\n`);
+      p(JSON.stringify({ profiles: r.profiles }, null, 2).split("\n").map((l) => "  " + l).join("\n"));
+      p(`\n  or run: ocfleet suggest --write\n`);
+      return;
+    }
+    const { stateDir, ensureDir, readJson, writeJson } = await import("../src/util.mjs");
+    const target = path.join(ensureDir(stateDir()), "fleet.config.json");
+    const current = readJson(target, {});
+    if (fs.existsSync(target)) fs.copyFileSync(target, target + ".bak");
+    current.profiles = r.profiles;
+    writeJson(target, current);
+    p(`\n  ✓ wrote ${Object.keys(r.profiles).length} profiles to ${target}${fs.existsSync(target + ".bak") ? " (backup: fleet.config.json.bak)" : ""}\n`);
+  },
+
   async status(a) {
     if (a._[0]) {
       const j = await J.refresh(a._[0]);
@@ -241,6 +267,7 @@ const cmds = {
     const { stateDir, ensureDir } = await import("../src/util.mjs");
     const target = path.join(ensureDir(stateDir()), "fleet.config.json");
     if (fs.existsSync(target) && !a.flags.force) return p(`exists: ${target} (use --force to overwrite)`);
+    if (fs.existsSync(target)) { fs.copyFileSync(target, target + ".bak"); p(`  backup: ${target}.bak`); }
     const starter = {
       defaults: DEFAULTS.defaults,
       budget: DEFAULTS.budget,

@@ -59,10 +59,15 @@ Always supply:
 - **done** — the acceptance criterion in one sentence.
 - **constraints** — what must not change (public API, dependencies, formatting).
 
-Picking a profile: `cheap` for mechanical work, `balanced` (default) for normal
-feature work and bug fixes, `strong` when the logic is tricky or the first attempt
-failed, `longcontext` when the job must read a lot at once, `local` for free
-offline models. Escalate on failure rather than starting expensive.
+Picking a profile: `free` for bulk work where a weaker model is acceptable (zero
+cost), `cheap` for mechanical work, `balanced` (default) for normal feature work and
+bug fixes, `strong` when the logic is tricky or the first attempt failed,
+`longcontext` when the job must read a lot at once, `local` for offline models.
+Escalate on failure rather than starting expensive.
+
+If a profile reports nothing usable, call `fleet_models` with `suggest: true` — it
+proposes candidate lists built from the providers this machine is authenticated for,
+which the user can apply with `ocfleet suggest --write`.
 
 ## Reviewing
 
