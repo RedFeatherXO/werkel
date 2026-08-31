@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Minimal OpenAI-compatible mock so we can exercise opencode end-to-end for free."""
-import json, time, os, sys, re, traceback
+import json, time, os, sys, re, traceback, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Opt-in request log. It used to be a hard-coded path from the machine this was
 # written on, which made the mock crash on every request everywhere else.
 LOG = os.environ.get("MOCK_LLM_LOG")
+
+# Counter for mock-flaky to track requests
+flaky_request_count = 0
+flaky_lock = threading.Lock()
 
 def sse(obj):
     return ("data: " + json.dumps(obj) + "\n\n").encode()
@@ -15,9 +19,9 @@ class H(BaseHTTPRequestHandler):
                                     # socket, which strict HTTP clients call an error
     def log_message(self, *a): pass
 
-    def _send(self, body, ctype):
+    def _send(self, body, ctype, status=200):
         try:
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
@@ -29,7 +33,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/v1/models"):
-            self._send(json.dumps({"object":"list","data":[{"id":"mock-coder","object":"model","owned_by":"mock"}]}).encode(),
+            self._send(json.dumps({"object":"list","data":[{"id":"mock-coder","object":"model","owned_by":"mock"},{"id":"mock-broken","object":"model","owned_by":"mock"},{"id":"mock-flaky","object":"model","owned_by":"mock"}]}).encode(),
                        "application/json")
         else:
             self.send_response(404); self.send_header("Content-Length","0"); self.end_headers()
@@ -58,6 +62,36 @@ class H(BaseHTTPRequestHandler):
                     f.write(json.dumps({"path": self.path, "body": req})[:20000] + "\n")
             except OSError as e:
                 sys.stderr.write("mock_llm: cannot write MOCK_LLM_LOG (%s)\n" % e)
+
+        model = req.get("model", "mock-coder")
+        
+        # Handle mock-broken and mock-flaky models
+        if model == "mock-broken":
+            error_body = json.dumps({
+                "error": {
+                    "message": "The model is overloaded. Please try again later.",
+                    "type": "server_error",
+                    "code": 503
+                }
+            }).encode()
+            self._send(error_body, "application/json", status=503)
+            return
+            
+        if model == "mock-flaky":
+            global flaky_request_count
+            with flaky_lock:
+                flaky_request_count += 1
+                if flaky_request_count == 1:
+                    # First request fails with 503
+                    error_body = json.dumps({
+                        "error": {
+                            "message": "The model is overloaded. Please try again later.",
+                            "type": "server_error",
+                            "code": 503
+                        }
+                    }).encode()
+                    self._send(error_body, "application/json", status=503)
+                    return
 
         msgs = req.get("messages",[])
         tools = [t.get("function",{}).get("name") for t in (req.get("tools") or [])]
@@ -101,6 +135,7 @@ class H(BaseHTTPRequestHandler):
                 "application/json")
 
 if __name__ == "__main__":
-    srv = ThreadingHTTPServer(("127.0.0.1", 8099), H)
+    port = int(os.environ.get("MOCK_PORT", "8099"))
+    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
     srv.daemon_threads = True
     srv.serve_forever()
