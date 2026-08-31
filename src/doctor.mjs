@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { which, run, stateDir, readJson, humanDuration, resolveBin } from "./util.mjs";
 import { loadConfig } from "./config.mjs";
-import { installedModels, installedModelsSmart, openrouterCatalog, budgetCheck, spentToday } from "./models.mjs";
+import { installedModels, installedModelsSmart, openrouterCatalog, modelsDevCatalog, budgetCheck, spentToday } from "./models.mjs";
 import { listJobIds, readJob, refreshAll } from "./jobs.mjs";
 
 export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
@@ -40,16 +40,21 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
   out.info.authenticatedProviders = authProviders.length ? authProviders : "none found (run: opencode auth login)";
   if (!authProviders.length) warn("no provider credentials found — every delegation will fail until you run `opencode auth login`");
 
-  let orCatalog = {};
+  let orCatalog = {}, mdCatalog = {};
   try { orCatalog = await openrouterCatalog(); out.info.openrouterCatalogue = Object.keys(orCatalog).length + " models"; }
   catch (e) { warn(`OpenRouter price catalogue unavailable: ${e.message} — prices for openrouter/* cannot be checked`); }
+  try {
+    mdCatalog = await modelsDevCatalog();
+    out.info.modelsDevCatalogue = `${Object.keys(mdCatalog).length} providers`;
+  } catch (e) { warn(`models.dev catalogue unavailable: ${e.message} — non-OpenRouter models will look unpriced`); }
+  if (!Object.keys(mdCatalog).length) warn("models.dev catalogue empty — providers other than OpenRouter cannot be priced");
 
   const known = new Set(installed);
   out.info.profiles = {};
   for (const [name, prof] of Object.entries(cfg.profiles ?? {})) {
     const rows = (prof.candidates ?? []).map((c) => {
       const present = known.has(c);
-      const chk = budgetCheck(c, cfg, orCatalog, {});
+      const chk = budgetCheck(c, cfg, orCatalog, { mdCatalog });
       return { model: c, available: present, allowed: chk.allowed, reason: present ? (chk.allowed ? "ok" : chk.reason) : "provider not configured" };
     });
     const usable = rows.find((r) => r.available && r.allowed);

@@ -8,7 +8,8 @@
   "scripts": {
     "doctor": "node bin/ocfleet.mjs doctor",
     "mcp": "node bin/ocfleet.mjs mcp",
-    "test": "node test/mcp_smoke.mjs /tmp/opencode-fleet-testrepo"
+    "test": "node --test test/budget.test.mjs && node test/mcp_smoke.mjs /tmp/opencode-fleet-testrepo",
+    "test:unit": "node --test test/budget.test.mjs"
   },
   "files": ["bin", "src", "config", "skills", "docs", "scripts", "README.md"],
   "keywords": ["mcp", "opencode", "claude", "agents", "orchestration", "openrouter"],
