@@ -71,6 +71,14 @@ override → live OpenRouter API → models.dev (which opencode itself resolves 
 match and all 200+ providers are covered) → refuse. Local models are priced at zero in
 `staticPricing`.
 
+**Ranking uses published benchmarks where they exist.**
+`capabilityOf()` reads Artificial Analysis' coding and agentic indices out of the
+OpenRouter catalogue (about 165 of 395 models carry them) and weights them 60/40;
+`valueScore()` divides that by the blended price. Name matching survives only as the
+fallback for unmeasured models, capped below the measured mid-field. The name regexes
+carry word boundaries for a reason: without them "gemini" matches "mini" and every
+Gemini model is penalised as a small variant.
+
 **Suggestions only name providers you can reach.**
 `opencode models` happily lists Bedrock and Copilot models on a machine with no such
 credentials; a profile built from that list would hang on first use. `ocfleet suggest`

@@ -115,6 +115,15 @@ OpenRouter, …) — plus OpenRouter's live API for `openrouter/*`, both cached 
 than silently billed. Provider setup for OpenCode itself:
 [`config/opencode.providers.example.json`](config/opencode.providers.example.json).
 
+Models are ranked on published benchmarks, not guesswork. The OpenRouter catalogue
+carries Artificial Analysis indices for ~165 of its models, and the fleet scores a
+worker as `0.6 × coding_index + 0.4 × agentic_index` — a worker has to write the code
+*and* drive the tools. `value = capability / (1 + blended price)` with
+`blended = (3 × input + output) / 4`, since a coding turn reads far more than it writes.
+Models without published numbers are estimated from their name, deliberately below a
+measured mid-tier model, so an unknown never outranks a proven one. `ocfleet models`
+prints both numbers (`~` marks an estimate).
+
 Don't hand-write candidate lists — generate them from what you actually have:
 
 ```bash

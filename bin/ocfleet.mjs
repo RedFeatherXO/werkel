@@ -108,10 +108,13 @@ const cmds = {
     if (a.flags.json) return jsonOut(rows);
     const show = a.flags.all ? rows : rows.filter((r) => r.allowed);
     p(`\n  budget: ≤ $${cfg.budget.maxPromptUsdPerMTok}/Mtok input, ≤ $${cfg.budget.maxCompletionUsdPerMTok}/Mtok output, tools required: ${cfg.budget.requireToolSupport}\n`);
-    p(`  ${"".padEnd(3)}${"model".padEnd(48)} ${"in".padStart(7)} ${"out".padStart(7)}  ctx`);
+    p(`  ${"".padEnd(3)}${"model".padEnd(46)} ${"in".padStart(7)} ${"out".padStart(7)} ${"cap".padStart(5)} ${"value".padStart(6)}  ctx`);
     for (const r of show) {
-      p(`  ${r.allowed ? "✓ " : "✗ "} ${r.model.padEnd(48)} ${(r.prompt ?? "?").toString().padStart(7)} ${(r.completion ?? "?").toString().padStart(7)}  ${r.context ?? "?"}${r.allowed ? "" : "   ← " + r.reason}`);
+      const cap = r.capabilitySource === "artificial-analysis" ? String(r.capability) : `~${Math.round(r.capability)}`;
+      p(`  ${r.allowed ? "✓ " : "✗ "} ${r.model.padEnd(46)} ${(r.prompt ?? "?").toString().padStart(7)} ${(r.completion ?? "?").toString().padStart(7)} ${cap.padStart(5)} ${String(r.value ?? "?").padStart(6)}  ${r.context ?? "?"}${r.allowed ? "" : "   ← " + r.reason}`);
     }
+    p(`\n  cap = 0.6·coding + 0.4·agentic (Artificial Analysis, via OpenRouter); ~x means estimated from the name`);
+    p(`  value = cap / (1 + blended price), blended = (3·input + output)/4`);
     p(`\n  ${rows.filter((r) => r.allowed).length}/${rows.length} models pass the guard. Spent today: ${usd(spentToday().total ?? 0)}\n`);
   },
 

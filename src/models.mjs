@@ -30,12 +30,22 @@ export async function openrouterCatalog({ refresh = false, ttlHours = 24 } = {})
       const r4 = (n) => Math.round(n * 10000) / 10000;
       const p = r4(Number(m.pricing?.prompt ?? NaN) * PER_MTOK);
       const c = r4(Number(m.pricing?.completion ?? NaN) * PER_MTOK);
+      const aa = m.benchmarks?.artificial_analysis ?? null;
+      const arena = Array.isArray(m.benchmarks?.design_arena)
+        ? m.benchmarks.design_arena.filter((a) => typeof a?.elo === "number")
+        : [];
       out[m.id] = {
         prompt: Number.isFinite(p) && p >= 0 ? p : null,
         completion: Number.isFinite(c) && c >= 0 ? c : null,
         context: m.context_length ?? null,
         tools: (m.supported_parameters ?? []).includes("tools"),
-        name: m.name
+        name: m.name,
+        // Artificial Analysis indices, shipped inside the OpenRouter catalogue.
+        // Only ~40% of models carry them, so every consumer must handle null.
+        coding: typeof aa?.coding_index === "number" ? aa.coding_index : null,
+        agentic: typeof aa?.agentic_index === "number" ? aa.agentic_index : null,
+        intelligence: typeof aa?.intelligence_index === "number" ? aa.intelligence_index : null,
+        elo: arena.length ? Math.round(Math.max(...arena.map((a) => a.elo))) : null
       };
     }
     writeJson(file, out);
@@ -224,7 +234,12 @@ export async function allowedModels(cfg, { bin, cwd, refresh = false } = {}) {
   const rows = [];
   for (const ref of installed) {
     const chk = budgetCheck(ref, cfg, orCatalog, { mdCatalog });
-    rows.push({ model: ref, allowed: chk.allowed, reason: chk.reason, ...chk.info });
+    const cap = capabilityOf(ref, chk.info);
+    rows.push({
+      model: ref, allowed: chk.allowed, reason: chk.reason, ...chk.info,
+      capability: Math.round(cap.value * 10) / 10, capabilitySource: cap.source,
+      value: Math.round(valueScore(ref, chk.info) * 10) / 10
+    });
   }
   rows.sort((a, b) => (a.prompt ?? 1e9) - (b.prompt ?? 1e9));
   return rows;
@@ -264,20 +279,52 @@ export function estimateCost(tokens, price) {
  */
 const FAMILY_STRONG = /(qwen3(\.\d+)?-coder(-plus|-next)?|glm-5(\.\d+)?|kimi-k[23](\.\d+)?(-code)?|codestral|deepseek-v\d-pro|kat-coder|seed-\d+-code|north-mini-code|devstral|grok-code|minimax-m\d)/i;
 const FAMILY_CODING = /(coder|code|glm|deepseek|qwen|kimi|codestral|mistral|minimax|ling|nemotron|llama|gpt-oss)/i;
-const WEAK_NAME = /(nano|mini|tiny|lite|small|micro|[-_.](0\.\d|[1-9])b\b|preview|experimental|draft|distill)/i;
+// \b matters: without it "gemini" matches "mini" and every Gemini model gets
+// penalised as a small variant.
+const WEAK_NAME = /\b(nano|mini|tiny|lite|small|micro|preview|experimental|draft|distill)\b|[-_.](0\.\d|[1-9])b\b/i;
 const UNSTABLE_ID = /^~|:(batch|extended|thinking)$|latest$/i;
 
+/**
+ * What the model is worth per dollar. Benchmarks first — Artificial Analysis
+ * publishes a coding and an agentic index through the OpenRouter catalogue, and
+ * a fleet worker needs both: write the code, then drive the tools. Only models
+ * without published numbers fall back to reading the name.
+ */
+export function capabilityOf(ref, info) {
+  if (info?.coding != null || info?.agentic != null) {
+    const coding = info.coding ?? info.intelligence ?? 0;
+    const agentic = info.agentic ?? coding;
+    return { value: 0.6 * coding + 0.4 * agentic, source: "artificial-analysis" };
+  }
+  if (info?.intelligence != null) return { value: info.intelligence * 0.9, source: "intelligence-index" };
+  // No published benchmark: estimate from the name, deliberately below a
+  // measured mid-tier model so unknowns never outrank proven ones.
+  const name = splitRef(ref).model;
+  let guess = 30;
+  if (FAMILY_STRONG.test(name)) guess = 45;
+  else if (FAMILY_CODING.test(name)) guess = 38;
+  if (WEAK_NAME.test(name)) guess -= 18;
+  return { value: guess, source: "estimated-from-name" };
+}
+
+/** Blended price of a typical coding turn: much more input than output. */
+export function blendedCost(info) {
+  const inTok = info?.prompt ?? 0;
+  const outTok = info?.completion ?? inTok;
+  return (3 * inTok + outTok) / 4;
+}
+
+/** Capability per dollar. The +1 keeps free models near their raw capability. */
+export function valueScore(ref, info) {
+  return capabilityOf(ref, info).value / (1 + blendedCost(info));
+}
+
 function qualityScore(ref, info) {
-  const name = splitRef(ref).model;      // score the model, not the provider prefix
-  let score = 0;
-  if (FAMILY_STRONG.test(name)) score += 40;
-  else if (FAMILY_CODING.test(name)) score += 15;
-  if (WEAK_NAME.test(name)) score -= 35;
-  if ((info.context ?? 0) >= 1000000) score += 8;
-  else if ((info.context ?? 0) >= 250000) score += 4;
-  if (info.reasoning) score += 3;
-  // price is a weak capability proxy *within* a tier, never across tiers
-  score += Math.min(10, Math.log10(1 + (info.prompt ?? 0) * 10) * 6);
+  const cap = capabilityOf(ref, info);
+  let score = cap.value;
+  if ((info.context ?? 0) >= 1000000) score += 6;
+  else if ((info.context ?? 0) >= 250000) score += 3;
+  if (WEAK_NAME.test(splitRef(ref).model) && cap.source === "estimated-from-name") score -= 5;
   return score;
 }
 
@@ -295,11 +342,12 @@ function familyOf(ref) {
   return name.replace(/[:@].*$/, "").split(/[-_.]/)[0].replace(/\d+$/, "");
 }
 
+// order "value" = most capability per dollar, "quality" = most capability, period.
 const TIERS = [
-  { name: "free",     min: 0,     max: 0,   order: "quality", minScore: -10, description: "Free models — bulk work at zero cost" },
-  { name: "cheap",    min: 0.001, max: 0.3, order: "price",   minScore: 10,  description: "Boilerplate, tests, renames, mechanical refactors" },
-  { name: "balanced", min: 0.05,  max: 0.8, order: "quality", minScore: 10,  description: "Default worker: features, bug fixes, medium refactors" },
-  { name: "strong",   min: 0.6,   max: null, order: "quality", minScore: 20, description: "Tricky logic, cross-file changes, unclear bugs" }
+  { name: "free",     min: 0,     max: 0,    order: "quality", minScore: 0,  description: "Free models — bulk work at zero cost" },
+  { name: "cheap",    min: 0.001, max: 0.3,  order: "value",   minScore: 35, description: "Boilerplate, tests, renames, mechanical refactors" },
+  { name: "balanced", min: 0.05,  max: 0.9,  order: "quality", minScore: 45, description: "Default worker: features, bug fixes, medium refactors" },
+  { name: "strong",   min: 0.4,   max: null, order: "quality", minScore: 55, description: "Tricky logic, cross-file changes, unclear bugs" }
 ];
 
 /**
@@ -327,7 +375,7 @@ export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minConte
     .filter((r) => (r.info.context ?? 0) >= minContext)
     .filter((r) => r.info.status !== "deprecated")
     .filter((r) => r.info.prompt <= ceiling && r.info.completion <= outCeiling)
-    .map((r) => ({ ...r, score: qualityScore(r.ref, r.info) }));
+    .map((r) => ({ ...r, score: qualityScore(r.ref, r.info), value: valueScore(r.ref, r.info) }));
 
   const pickDiverse = (pool, description, limit = 4) => {
     const picks = [];
@@ -347,19 +395,16 @@ export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minConte
     const pool = priced
       .filter((r) => r.info.prompt >= tier.min && (tier.max == null || r.info.prompt <= tier.max))
       .filter((r) => r.score >= tier.minScore)
-      .sort((a, b) => tier.order === "price"
-        // Coding-built models first, then cheapest — but only price differences
-        // that matter count. $0.070 vs $0.075 is noise; picking the cheaper one
-        // there costs you five times the context for nothing.
-        ? (b.score >= 40) - (a.score >= 40) || priceBand(a.info.prompt) - priceBand(b.info.prompt) || b.score - a.score
+      .sort((a, b) => tier.order === "value"
+        ? b.value - a.value || b.score - a.score
         : b.score - a.score || a.info.prompt - b.info.prompt);
     const built = pickDiverse(pool, tier.description);
     if (built) profiles[tier.name] = built;
   }
 
-  // long context wants reach and a low price, not the priciest model that fits
+  // long context wants reach and value, not the priciest model that fits
   const long = priced.filter((r) => (r.info.context ?? 0) >= 500000)
-    .sort((a, b) => (b.score >= 40) - (a.score >= 40) || a.info.prompt - b.info.prompt)
+    .sort((a, b) => b.value - a.value)
     .slice(0, 4).map((r) => r.ref);
   if (long.length) profiles.longcontext = { description: "Jobs that must read a lot at once (500k+ context)", candidates: long };
 

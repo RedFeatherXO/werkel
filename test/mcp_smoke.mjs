@@ -230,6 +230,7 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
   const M = await import(path.join(ROOT, "src/models.mjs"));
   const C = await import(path.join(ROOT, "src/catalog.mjs"));
   const md = await C.modelsDevCatalog();
+  const orLive = await M.openrouterCatalog();
   const inv = [];
   for (const prov of ["openrouter", "opencode"]) for (const m of Object.keys(md[prov] ?? {})) inv.push(prov + "/" + m);
   const cfg = { ...(await import(path.join(ROOT, "src/config.mjs"))).DEFAULTS };
@@ -237,8 +238,12 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
   const names = (t) => (sug.profiles[t]?.candidates ?? []).join(" ");
   ok("suggest: all tiers filled", ["free","cheap","balanced","strong","longcontext"].every(t => sug.profiles[t]?.candidates?.length),
      Object.keys(sug.profiles).join(","));
-  ok("suggest: no mini/nano in paid tiers", !/nano|mini|tiny|-3b|-8b/i.test(names("cheap") + names("balanced") + names("strong")),
-     names("cheap").split(" ")[0]);
+  const weakest = (t, floor) => (sug.profiles[t]?.candidates ?? [])
+    .map((c) => ({ c, cap: M.capabilityOf(c, M.priceInfo(c, cfg, orLive, md)).value }))
+    .filter((x) => x.cap < floor);
+  const tooWeak = [...weakest("cheap", 35), ...weakest("balanced", 45), ...weakest("strong", 55)];
+  ok("suggest: paid tiers only hold capable models", tooWeak.length === 0,
+     tooWeak.map((x) => `${x.c} cap ${Math.round(x.cap)}`).join(", ") || "all above their tier floor");
   const price = (ref) => M.priceInfo(ref, cfg, {}, md).prompt ?? 0;
   const avg = (t) => (sug.profiles[t]?.candidates ?? []).reduce((s, r) => s + price(r), 0) / (sug.profiles[t]?.candidates?.length || 1);
   ok("suggest: tiers ordered by capability", avg("cheap") < avg("balanced") && avg("balanced") <= avg("strong"),
@@ -247,6 +252,9 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
   const cheapFirstCtx = M.priceInfo(cheapFirst, cfg, {}, md).context ?? 0;
   ok("suggest: near-equal prices lose to more context", cheapFirstCtx >= 1000000,
      `${cheapFirst} @ ${Math.round(cheapFirstCtx / 1000)}k ctx`);
+  const benchmarked = (ref) => M.capabilityOf(ref, M.priceInfo(ref, cfg, orLive, md)).source === "artificial-analysis";
+  ok("suggest: measured models lead the cheap tier", benchmarked(sug.profiles.cheap.candidates[0]),
+     `${sug.profiles.cheap.candidates[0]} (${M.capabilityOf(sug.profiles.cheap.candidates[0], M.priceInfo(sug.profiles.cheap.candidates[0], cfg, orLive, md)).source})`);
   ok("suggest: longcontext is cheap and wide", (sug.profiles.longcontext.candidates ?? []).some(r => price(r) < 0.3),
      sug.profiles.longcontext.candidates[0]);
 }

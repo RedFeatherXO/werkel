@@ -59,6 +59,10 @@ Always supply:
 - **done** — the acceptance criterion in one sentence.
 - **constraints** — what must not change (public API, dependencies, formatting).
 
+`fleet_models` reports each model's `capability` (0.6·coding + 0.4·agentic from
+Artificial Analysis, `~` when estimated from the name) and `value` (capability per
+dollar). Use `capability` when the task is hard and `value` when it is bulk work.
+
 Picking a profile: `free` for bulk work where a weaker model is acceptable (zero
 cost), `cheap` for mechanical work, `balanced` (default) for normal feature work and
 bug fixes, `strong` when the logic is tricky or the first attempt failed,
