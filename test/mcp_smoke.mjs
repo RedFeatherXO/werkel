@@ -17,7 +17,11 @@ fs.writeFileSync(REPO + "/opencode.json", JSON.stringify({
   $schema: "https://opencode.ai/config.json",
   provider: { mock: { npm: "@ai-sdk/openai-compatible", name: "Mock",
     options: { baseURL: "http://127.0.0.1:8099/v1", apiKey: "sk-mock" },
-    models: { "mock-coder": { name: "Mock Coder" } } } }
+    models: {
+      "mock-coder": { name: "Mock Coder" },
+      "mock-broken": { name: "Mock Coder (always 503)" },
+      "mock-flaky": { name: "Mock Coder (fails once)" }
+    } } }
 }, null, 2));
 g("add", "-A"); g("commit", "-qm", "init");
 
@@ -30,10 +34,16 @@ const TEST_HOME = "/tmp/opencode-fleet-teststate";
   fsx.mkdirSync(TEST_HOME, { recursive: true });
   fsx.writeFileSync(path.join(TEST_HOME, "fleet.config.json"), JSON.stringify({
     budget: { allow: ["mock/*"], maxDailyUsd: 100 },
-    staticPricing: { "mock/mock-coder": { prompt: 0.05, completion: 0.2, context: 200000, tools: true } },
+    staticPricing: {
+      "mock/mock-coder": { prompt: 0.05, completion: 0.2, context: 200000, tools: true },
+      "mock/mock-broken": { prompt: 0.05, completion: 0.2, context: 200000, tools: true },
+      "mock/mock-flaky": { prompt: 0.05, completion: 0.2, context: 200000, tools: true }
+    },
     profiles: {
       cheap: { description: "test", candidates: ["mock/mock-coder"] },
-      balanced: { description: "test", candidates: ["mock/mock-coder"] }
+      balanced: { description: "test", candidates: ["mock/mock-coder"] },
+      // first candidate always answers 503 — the fleet must move on by itself
+      failovertest: { description: "test", candidates: ["mock/mock-broken", "mock/mock-coder"] }
     }
   }, null, 2));
 }
@@ -233,8 +243,34 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
   const avg = (t) => (sug.profiles[t]?.candidates ?? []).reduce((s, r) => s + price(r), 0) / (sug.profiles[t]?.candidates?.length || 1);
   ok("suggest: tiers ordered by capability", avg("cheap") < avg("balanced") && avg("balanced") <= avg("strong"),
      `cheap $${avg("cheap").toFixed(2)} < balanced $${avg("balanced").toFixed(2)} <= strong $${avg("strong").toFixed(2)}`);
+  const cheapFirst = sug.profiles.cheap?.candidates?.[0] ?? "";
+  const cheapFirstCtx = M.priceInfo(cheapFirst, cfg, {}, md).context ?? 0;
+  ok("suggest: near-equal prices lose to more context", cheapFirstCtx >= 1000000,
+     `${cheapFirst} @ ${Math.round(cheapFirstCtx / 1000)}k ctx`);
   ok("suggest: longcontext is cheap and wide", (sug.profiles.longcontext.candidates ?? []).some(r => price(r) < 0.3),
      sug.profiles.longcontext.candidates[0]);
+}
+
+// a provider that fails must not end the job: it moves to the next candidate
+{
+  const f = await call("fleet_delegate", {
+    task: "Job F: edit TARGET=src/b.js with CONTENT=export const b = 7;",
+    repo: REPO, profile: "failovertest", title: "failover", timeoutSec: 90
+  });
+  ok("failover: starts on the broken model", f.model === "mock/mock-broken", `${f.model}, fallbacks: ${(f.fallbacks || []).join(",")}`);
+  let fin = null;
+  for (let i = 0; i < 12 && !fin; i++) {
+    const w = await call("fleet_wait", { jobIds: [f.jobId], timeoutSec: 40 });
+    fin = w.done?.[0] ?? null;
+  }
+  ok("failover: job still succeeds", fin?.state === "done", `${fin?.state} on ${fin?.model}`);
+  ok("failover: switched to the working model", fin?.model === "mock/mock-coder", fin?.model);
+  ok("failover: the failed attempt is reported", (fin?.previousAttempts ?? []).some(a => a.includes("mock-broken")),
+     (fin?.previousAttempts ?? [])[0] ?? "none recorded");
+  const fres = await call("fleet_result", { jobId: f.jobId });
+  ok("failover: work actually landed", fres.patch?.includes("b.js"), fres.diffstat?.split("\n")[0]);
+  if (fin?.state !== "done") await explainFailure(f.jobId);
+  await call("fleet_cleanup", { jobId: f.jobId, force: true });
 }
 
 const status = await call("fleet_status", {});

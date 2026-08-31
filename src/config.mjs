@@ -20,6 +20,8 @@ export const DEFAULTS = {
     autoApprove: true,      // pass --auto to opencode (safe because of worktree isolation)
     autoCommit: true,       // commit the worker's changes on its own branch when the job ends
     maxConcurrentJobs: 4,
+    failover: true,         // on a provider failure, retry with the profile's next candidate
+    maxAttempts: 3,         // hard cap on attempts per job, including the first
     agent: null,            // opencode agent name, e.g. "build" or a custom subagent
     variant: null           // reasoning effort, e.g. "high" (provider specific)
   },

@@ -3,7 +3,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { stateDir, ensureDir, readJson, writeJson, newId, expandHome, truncate, humanDuration, run, resolveBin } from "./util.mjs";
 import { loadConfig } from "./config.mjs";
-import { resolveModel, openrouterCatalog, installedModelsSmart, spentToday, recordSpend, estimateCost, priceInfo } from "./models.mjs";
+import { resolveModel, openrouterCatalog, modelsDevCatalog, installedModelsSmart, budgetCheck, spentToday, recordSpend, estimateCost, priceInfo } from "./models.mjs";
+import { classifyFailure } from "./failover.mjs";
 import { createWorktree, commitAll, diffSummary, repoRoot } from "./worktree.mjs";
 import { buildWorkerPrompt, buildFollowupPrompt } from "./prompt.mjs";
 
@@ -31,9 +32,12 @@ function alive(pid) {
 
 // ---- event parsing --------------------------------------------------------
 
-/** Turn opencode's NDJSON event stream into something a manager can act on. */
-export function parseEvents(id) {
-  const file = path.join(jobDir(id), "events.ndjson");
+/** Turn opencode's NDJSON event stream into something a manager can act on.
+ *  `dir` matters: a follow-up round or a failover attempt writes into its own
+ *  subdirectory, and reading the base directory would replay the previous
+ *  attempt's outcome forever. */
+export function parseEvents(id, dir) {
+  const file = path.join(dir ?? jobDir(id), "events.ndjson");
   const out = { sessionId: null, text: "", tools: [], tokens: { input: 0, output: 0, reasoning: 0 }, cost: 0, steps: 0, errors: [], eventCount: 0 };
   let raw = "";
   try { raw = fs.readFileSync(file, "utf8"); } catch { return out; }
@@ -111,6 +115,7 @@ export async function delegate(input) {
 
   const spend = spentToday();
   const orCatalog = await openrouterCatalog().catch(() => ({}));
+  const mdCatalog = await modelsDevCatalog().catch(() => ({}));
   const bin = resolveBin(cfg);
   const installed = await installedModelsSmart(cfg, { bin, cwd: dirIn });
   const picked = await resolveModel(
@@ -118,6 +123,17 @@ export async function delegate(input) {
     cfg, { bin, cwd: dirIn, orCatalog, installed, spentToday: spend.total ?? 0 }
   );
   if (picked.error) return { error: picked.error, rejected: picked.rejected, hint: picked.hint, spentToday: spend.total };
+
+  // Fallbacks come from the profile, in its own order, minus what the guard refuses.
+  // An explicitly named model means "this one" — we do not silently swap it out.
+  const profileName = input.model ? null : (input.profile ?? cfg.defaults.profile);
+  const candidates = [picked.model];
+  if (profileName && (input.failover ?? cfg.defaults.failover)) {
+    for (const cand of cfg.profiles?.[profileName]?.candidates ?? []) {
+      if (candidates.includes(cand)) continue;
+      if (budgetCheck(cand, cfg, orCatalog, { spentToday: spend.total ?? 0, mdCatalog }).allowed) candidates.push(cand);
+    }
+  }
 
   const id = newId();
   const dir0 = ensureDir(jobDir(id));
@@ -143,6 +159,11 @@ export async function delegate(input) {
     done: input.done ?? null,
     readOnly: !!input.readOnly,
     model: picked.model,
+    candidates,
+    attemptIndex: 0,
+    attempts: [],
+    failover: profileName ? (input.failover ?? cfg.defaults.failover) : false,
+    maxAttempts: input.maxAttempts ?? cfg.defaults.maxAttempts ?? 3,
     profile: input.profile ?? (input.model ? null : cfg.defaults.profile),
     price: picked.price,
     dir: wt.path,
@@ -180,6 +201,7 @@ export async function delegate(input) {
     price: picked.price ? `$${picked.price.prompt}/$${picked.price.completion} per Mtok` : "unknown",
     worktree: wt.mode === "worktree" ? { path: wt.path, branch: wt.branch, base: wt.base } : { mode: wt.mode, path: wt.path, warning: wt.warning },
     timeoutSec: job.timeoutSec,
+    fallbacks: candidates.length > 1 ? candidates.slice(1) : undefined,
     warning: picked.warning,
     spentTodayUsd: spend.total ?? 0,
     note: "job runs detached — poll with fleet_status / fleet_wait, then review with fleet_diff"
@@ -215,6 +237,47 @@ echo $code > '${dir0}/exit'
   return { pid: child.pid, script };
 }
 
+/**
+ * Start another attempt for an existing job: same id, same worktree, a fresh
+ * directory for its output so the previous attempt's exit code cannot be misread.
+ */
+async function relaunch(job, why) {
+  const cfg = loadConfig(job.sourceRepo);
+  const dir0 = ensureDir(path.join(jobDir(job.id), `attempt${job.attemptIndex + 1}`));
+
+  // the failed attempt produced nothing, but make sure of it before reusing the tree
+  if (job.worktree?.mode === "worktree") {
+    await run("git", ["-C", job.dir, "reset", "--hard", "-q"]).catch(() => {});
+    await run("git", ["-C", job.dir, "clean", "-fdq"]).catch(() => {});
+  }
+
+  const prompt = buildWorkerPrompt(job);
+  fs.writeFileSync(path.join(dir0, "prompt.md"), prompt);
+
+  const args = ["run", "--format", "json", "--dir", job.dir, "--title", `fleet ${job.id} (attempt ${job.attemptIndex + 1})`];
+  if (cfg.defaults.autoApprove) args.push("--auto");
+  args.push("--model", job.model);
+  if (job.agent) args.push("--agent", job.agent);
+  if (job.variant) args.push("--variant", job.variant);
+  args.push(prompt);
+
+  const started = launch({ ...job, jobDir: dir0 }, cfg, args, { readOnly: job.readOnly });
+  if (!started?.pid) return false;
+
+  job.jobDir = dir0;
+  job.pid = started.pid;
+  job.state = "running";
+  job.startedMs = Date.now();
+  job.endedMs = null;
+  job.durationMs = null;
+  job.error = null;
+  job.exitCode = undefined;
+  job.report = null;
+  job.sessionId = null;
+  job.failoverNote = why;
+  return true;
+}
+
 /** Refresh a job's state from disk: exit code, events, cost, and (once) auto-commit. */
 export async function refresh(id) {
   if (!id || typeof id !== "string") return null;
@@ -238,7 +301,7 @@ export async function refresh(id) {
   }
 
   const code = parseInt(fs.readFileSync(exitFile, "utf8").trim() || "1", 10);
-  const ev = parseEvents(id);
+  const ev = parseEvents(id, job.jobDir);
   job.exitCode = code;
   job.sessionId = ev.sessionId ?? job.sessionId;
   job.tokens = ev.tokens;
@@ -263,6 +326,27 @@ export async function refresh(id) {
     job.error = truncate(ev.errors.join("; "), 1500);
   } else {
     job.state = "done";
+  }
+
+  // A job that died before producing anything is usually the provider's fault,
+  // not the task's — move to the next candidate instead of surfacing a failure.
+  if ((job.state === "failed" || job.state === "timeout") && job.failover) {
+    const verdict = classifyFailure(job, ev);
+    const nextModel = (job.candidates ?? [])[job.attemptIndex + 1];
+    const attemptsLeft = (job.attempts?.length ?? 0) + 1 < (job.maxAttempts ?? 3);
+    if (verdict.retryable && nextModel && attemptsLeft) {
+      job.attempts = (job.attempts ?? []).concat([{
+        model: job.model, category: verdict.category, reason: verdict.reason,
+        durationMs: job.durationMs, at: new Date().toISOString()
+      }]);
+      job.attemptIndex += 1;
+      job.model = nextModel;
+      job.price = priceInfo(nextModel, loadConfig(job.sourceRepo), {}, undefined);
+      const relaunched = await relaunch(job, `failover to ${nextModel} after ${verdict.category} failure`);
+      if (relaunched) return saveJob(job);
+    } else if (verdict.retryable && !nextModel) {
+      job.error = `${job.error ?? verdict.reason} — no fallback candidate left (tried ${[...(job.attempts ?? []).map((a) => a.model), job.model].join(", ")})`;
+    }
   }
 
   if (job.autoCommit && job.worktree?.mode === "worktree" && !job.committed) {
@@ -298,6 +382,11 @@ export function jobView(job, { verbose = false } = {}) {
     committed: job.committed ? String(job.committed).slice(0, 8) : undefined
   };
   if (job.error) v.error = job.error;
+  if (job.attempts?.length) {
+    v.attempt = `${job.attemptIndex + 1}/${job.maxAttempts ?? 3}`;
+    v.previousAttempts = job.attempts.map((a) => `${a.model}: ${a.category} — ${String(a.reason).slice(0, 120)}`);
+  }
+  if (job.failoverNote) v.failover = job.failoverNote;
   if (verbose) {
     v.task = job.task;
     v.report = job.report;

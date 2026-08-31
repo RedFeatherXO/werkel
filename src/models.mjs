@@ -281,6 +281,12 @@ function qualityScore(ref, info) {
   return score;
 }
 
+/** Group prices into ~2x bands, so near-identical prices tie and capability decides. */
+function priceBand(usdPerMtok) {
+  if (!usdPerMtok) return -99;
+  return Math.floor(Math.log10(usdPerMtok) * 3);
+}
+
 /** "z-ai/glm-5.3-flash" -> "glm", so one family cannot fill a whole profile. */
 function familyOf(ref) {
   const name = splitRef(ref).model.split("/").pop().toLowerCase();
@@ -342,8 +348,10 @@ export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minConte
       .filter((r) => r.info.prompt >= tier.min && (tier.max == null || r.info.prompt <= tier.max))
       .filter((r) => r.score >= tier.minScore)
       .sort((a, b) => tier.order === "price"
-        // coding-built models first, then genuinely cheapest
-        ? (b.score >= 40) - (a.score >= 40) || a.info.prompt - b.info.prompt
+        // Coding-built models first, then cheapest — but only price differences
+        // that matter count. $0.070 vs $0.075 is noise; picking the cheaper one
+        // there costs you five times the context for nothing.
+        ? (b.score >= 40) - (a.score >= 40) || priceBand(a.info.prompt) - priceBand(b.info.prompt) || b.score - a.score
         : b.score - a.score || a.info.prompt - b.info.prompt);
     const built = pickDiverse(pool, tier.description);
     if (built) profiles[tier.name] = built;

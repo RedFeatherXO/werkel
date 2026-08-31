@@ -39,6 +39,8 @@ const TOOLS = [
         verify: { type: "string", description: "Shell command the worker must run and report, e.g. 'npm test -- auth'." },
         done: { type: "string", description: "Definition of done in one or two sentences." },
         readOnly: { type: "boolean", description: "Investigation only: file edits are denied, the worker reports findings. Good for cheap models on unclear bugs." },
+        failover: { type: "boolean", description: "On a provider failure (API error, rate limit, timeout with no work done), retry automatically with the profile's next candidate. Default true for profile jobs, never for an explicitly named model." },
+        maxAttempts: { type: "number", description: "Cap on attempts per job including the first (default 3)." },
         worktree: { type: "boolean", description: "Isolate in a new git worktree+branch (default true). false = edit the repo directly." },
         baseRef: { type: "string", description: "Branch/commit the worktree starts from (default: current branch)." },
         timeoutSec: { type: "number", description: "Hard kill after this many seconds (default 1200)." },
@@ -49,7 +51,7 @@ const TOOLS = [
   },
   {
     name: "fleet_wait",
-    description: "Block until the given jobs finish (or the wait times out). Use this instead of polling in a loop. Returns finished jobs with their report, cost and tool usage.",
+    description: "Block until the given jobs finish (or the wait times out). Use this instead of polling in a loop. Returns finished jobs with their report, cost and tool usage. Keep timeoutSec at or below 45 when this server is reached through a bridge or proxy that caps call duration; call it repeatedly instead of waiting long once.",
     inputSchema: { type: "object", properties: {
       jobIds: { type: "array", items: { type: "string" }, description: "Jobs to wait for. Omit = all running jobs." },
       timeoutSec: { type: "number", description: "How long to wait, default 120. The job itself keeps running if the wait expires." } } }
@@ -161,7 +163,7 @@ async function callTool(name, a = {}) {
     case "fleet_logs": {
       const job = J.readJob(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
-      const ev = J.parseEvents(a.jobId);
+      const ev = J.parseEvents(a.jobId, job.jobDir);
       let stderr = "";
       try { stderr = fs.readFileSync(path.join(job.jobDir, "stderr.log"), "utf8"); } catch {}
       return {

@@ -33,7 +33,7 @@ If writing the work order takes longer than doing the change, do it yourself.
    separate git worktrees, so file-level independence is what keeps merges clean.
 3. **`fleet_delegate`** each job. Start them all before waiting on any — that is
    where the wall-clock win comes from.
-4. **`fleet_wait`** on the batch.
+4. **`fleet_wait`** on the batch. Poll in short calls (45s or less) rather than one long wait — a bridge between you and the fleet may cap how long a single call can block.
 5. **`fleet_result`** per job, then **read the patch**. The report is a claim; the
    diff is the evidence.
 6. **`fleet_followup`** with specific feedback (same session, same worktree, keeps
@@ -97,6 +97,8 @@ the full context again.
 |---|---|---|
 | `no candidate of profile X is usable` | provider not authenticated or ids changed | `fleet_doctor`, then `opencode auth login` |
 | job state `timeout` | model hung, or the task was too big | split the task, raise `timeoutSec`, or escalate the profile |
+| `previousAttempts` non-empty | the provider failed and the job moved to the next candidate by itself | nothing — but if it happens on every job, check `fleet_doctor`; a provider you pay for may be down |
+| `no fallback candidate left` | every model in the profile failed | usually not the models: check credentials, network, or the daily budget |
 | `merge failed: CONFLICT` | two jobs touched the same file | `fleet_apply` with `mode:"patch"` and resolve, or re-delegate one job on the updated base |
 | empty diff but state `done` | worker only talked | read `fleet_logs`; re-delegate with a sharper task and a `verify` command |
 | `daily budget exhausted` | spend cap hit | raise `budget.maxDailyUsd` in `~/.opencode-fleet/fleet.config.json` |

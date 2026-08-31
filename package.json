@@ -8,8 +8,9 @@
   "scripts": {
     "doctor": "node bin/ocfleet.mjs doctor",
     "mcp": "node bin/ocfleet.mjs mcp",
-    "test": "node --test test/budget.test.mjs && node test/mcp_smoke.mjs /tmp/opencode-fleet-testrepo",
-    "test:unit": "node --test test/budget.test.mjs"
+    "test": "node --test test/budget.test.mjs test/failover.test.mjs && python3 test/mock_llm_selftest.py && node test/mcp_smoke.mjs /tmp/opencode-fleet-testrepo",
+    "test:unit": "node --test test/budget.test.mjs test/failover.test.mjs",
+    "test:mock": "python3 test/mock_llm_selftest.py"
   },
   "files": ["bin", "src", "config", "skills", "docs", "scripts", "README.md"],
   "keywords": ["mcp", "opencode", "claude", "agents", "orchestration", "openrouter"],
