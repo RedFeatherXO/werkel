@@ -21,6 +21,24 @@ fs.writeFileSync(REPO + "/opencode.json", JSON.stringify({
 }, null, 2));
 g("add", "-A"); g("commit", "-qm", "init");
 
+// The suite must never touch the user's fleet config or spend real money:
+// its own state dir, its own profiles, and an explicit mock model everywhere.
+const TEST_HOME = "/tmp/opencode-fleet-teststate";
+{
+  const fsx = await import("node:fs");
+  fsx.rmSync(TEST_HOME, { recursive: true, force: true });
+  fsx.mkdirSync(TEST_HOME, { recursive: true });
+  fsx.writeFileSync(path.join(TEST_HOME, "fleet.config.json"), JSON.stringify({
+    budget: { allow: ["mock/*"], maxDailyUsd: 100 },
+    staticPricing: { "mock/mock-coder": { prompt: 0.05, completion: 0.2, context: 200000, tools: true } },
+    profiles: {
+      cheap: { description: "test", candidates: ["mock/mock-coder"] },
+      balanced: { description: "test", candidates: ["mock/mock-coder"] }
+    }
+  }, null, 2));
+}
+const TEST_ENV = { ...process.env, OPENCODE_FLEET_HOME: TEST_HOME };
+
 // start the mock model server ourselves so the suite is self-contained
 const mock = spawn("python3", [path.join(ROOT, "test/mock_llm.py")], { stdio: "ignore", detached: false });
 const upBy = Date.now() + 15000;
@@ -32,7 +50,7 @@ for (;;) {
 const shutdown = () => { try { mock.kill(); } catch {} };
 process.on("exit", shutdown); process.on("SIGINT", () => { shutdown(); process.exit(1); });
 
-const srv = spawn("node", [path.join(ROOT, "bin/ocfleet.mjs"), "mcp"], { stdio: ["pipe", "pipe", "pipe"] });
+const srv = spawn("node", [path.join(ROOT, "bin/ocfleet.mjs"), "mcp"], { stdio: ["pipe", "pipe", "pipe"], env: TEST_ENV });
 let buf = "", waiters = new Map(), nextId = 1;
 srv.stdout.on("data", (d) => {
   buf += d;
@@ -82,9 +100,11 @@ const unknown = await call("fleet_delegate", { task: "x", repo: REPO, model: "op
 ok("unknown model refused", !!unknown.error, unknown.error?.slice(0, 60));
 
 // two parallel jobs, isolated worktrees
-const a = await call("fleet_delegate", { task: "Job A: edit TARGET=src/a.js with CONTENT=export const a = 1;", repo: REPO, profile: "cheap", title: "A", timeoutSec: 90 });
-const b = await call("fleet_delegate", { task: "Job B: edit TARGET=src/b.js with CONTENT=export const b = 2;", repo: REPO, profile: "cheap", title: "B", timeoutSec: 90 });
+const a = await call("fleet_delegate", { task: "Job A: edit TARGET=src/a.js with CONTENT=export const a = 1;", repo: REPO, model: "mock/mock-coder", title: "A", timeoutSec: 90 });
+const b = await call("fleet_delegate", { task: "Job B: edit TARGET=src/b.js with CONTENT=export const b = 2;", repo: REPO, model: "mock/mock-coder", title: "B", timeoutSec: 90 });
 ok("two jobs started", !!a.jobId && !!b.jobId, `${a.jobId} / ${b.jobId}`);
+ok("suite stays on the mock model", [a, b].every(j => j.model === "mock/mock-coder"),
+   `${a.model} / ${b.model}`);
 ok("separate worktrees", a.worktree.path !== b.worktree.path);
 
 const waited = await call("fleet_wait", { jobIds: [a.jobId, b.jobId], timeoutSec: 180 });
@@ -110,7 +130,7 @@ const appliedB = await call("fleet_apply", { jobId: b.jobId, mode: "merge" });
 ok("second job merges too", appliedB.ok === true, appliedB.error?.slice(0, 120));
 
 // a job whose branch conflicts must fail loudly, not silently
-const c = await call("fleet_delegate", { task: "Job C: edit TARGET=src/a.js with CONTENT=export const a = 999;", repo: REPO, profile: "cheap", title: "C", timeoutSec: 90, baseRef: "HEAD~2" });
+const c = await call("fleet_delegate", { task: "Job C: edit TARGET=src/a.js with CONTENT=export const a = 999;", repo: REPO, model: "mock/mock-coder", title: "C", timeoutSec: 90, baseRef: "HEAD~2" });
 await call("fleet_wait", { jobIds: [c.jobId], timeoutSec: 120 });
 const conflicted = await call("fleet_apply", { jobId: c.jobId, mode: "merge" });
 ok("conflict reported with hint", conflicted.ok === false && /conflict|merge failed/i.test(conflicted.error ?? ""), (conflicted.error ?? "").slice(0, 90));
@@ -130,7 +150,7 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
   const md = await C.modelsDevCatalog();
   const inv = [];
   for (const prov of ["openrouter", "opencode"]) for (const m of Object.keys(md[prov] ?? {})) inv.push(prov + "/" + m);
-  const cfg = loadConfig("/nonexistent");
+  const cfg = { ...(await import(path.join(ROOT, "src/config.mjs"))).DEFAULTS };
   const sug = await M.suggestProfiles(cfg, { cwd: "/tmp", installedOverride: inv, authOverride: ["openrouter", "opencode"] });
   const names = (t) => (sug.profiles[t]?.candidates ?? []).join(" ");
   ok("suggest: all tiers filled", ["free","cheap","balanced","strong","longcontext"].every(t => sug.profiles[t]?.candidates?.length),

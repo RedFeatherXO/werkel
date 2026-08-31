@@ -12,6 +12,7 @@ export const jobDir = (id) => path.join(jobsDir(), id);
 const metaFile = (id) => path.join(jobDir(id), "job.json");
 
 export function readJob(id) {
+  if (!id || typeof id !== "string") return null;
   const m = readJson(metaFile(id));
   if (!m) return null;
   return m;
@@ -216,6 +217,7 @@ echo $code > '${dir0}/exit'
 
 /** Refresh a job's state from disk: exit code, events, cost, and (once) auto-commit. */
 export async function refresh(id) {
+  if (!id || typeof id !== "string") return null;
   const job = readJob(id);
   if (!job) return null;
   if (job.state !== "running") return job;
@@ -309,7 +311,8 @@ export function jobView(job, { verbose = false } = {}) {
 /** Block until the given jobs leave the running state (or the deadline passes). */
 export async function waitFor(ids, { timeoutSec = 120, pollMs = 2000 } = {}) {
   const deadline = Date.now() + timeoutSec * 1000;
-  const targets = ids?.length ? ids : runningJobs().map((j) => j.id);
+  const clean = (ids ?? []).filter((i) => typeof i === "string" && i);
+  const targets = clean.length ? clean : runningJobs().map((j) => j.id);
   if (!targets.length) return { done: [], stillRunning: [], note: "no running jobs" };
   for (;;) {
     const states = [];

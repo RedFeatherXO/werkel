@@ -111,7 +111,13 @@ const TOOLS = [
 
 // ---- handlers -------------------------------------------------------------
 
+const NEEDS_JOB = new Set(["fleet_status", "fleet_result", "fleet_diff", "fleet_logs", "fleet_followup", "fleet_apply", "fleet_cancel", "fleet_cleanup"]);
+
 async function callTool(name, a = {}) {
+  // a missing id used to crash on path.join(undefined); say what is wrong instead
+  if (NEEDS_JOB.has(name) && name !== "fleet_status" && (typeof a.jobId !== "string" || !a.jobId)) {
+    return { error: `${name} needs a jobId (string). Use fleet_status to list recent jobs.` };
+  }
   switch (name) {
     case "fleet_delegate": return await J.delegate(a);
 
