@@ -3,7 +3,9 @@
 import json, time, os, sys, re, traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-LOG = "/home/claude/lab/mock_requests.log"
+# Opt-in request log. It used to be a hard-coded path from the machine this was
+# written on, which made the mock crash on every request everywhere else.
+LOG = os.environ.get("MOCK_LLM_LOG")
 
 def sse(obj):
     return ("data: " + json.dumps(obj) + "\n\n").encode()
@@ -50,8 +52,12 @@ class H(BaseHTTPRequestHandler):
         raw = self.rfile.read(n)
         try: req = json.loads(raw)
         except Exception: req = {}
-        with open(LOG,"a") as f:
-            f.write(json.dumps({"path":self.path,"body":req})[:20000] + "\n")
+        if LOG:
+            try:
+                with open(LOG, "a") as f:
+                    f.write(json.dumps({"path": self.path, "body": req})[:20000] + "\n")
+            except OSError as e:
+                sys.stderr.write("mock_llm: cannot write MOCK_LLM_LOG (%s)\n" % e)
 
         msgs = req.get("messages",[])
         tools = [t.get("function",{}).get("name") for t in (req.get("tools") or [])]
