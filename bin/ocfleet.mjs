@@ -84,6 +84,7 @@ ocfleet — delegate coding jobs from Claude to OpenCode workers on cheaper mode
   ocfleet followup <jobId> "<feedback>"  continue the same session/worktree
   ocfleet apply <jobId> [--mode merge|squash|patch] [--target branch]
   ocfleet cleanup <jobId> [--force]      remove worktree + branch
+  ocfleet forget <jobId> [--force]       delete the record too, so it disappears from status
   ocfleet cancel <jobId>                 kill a running job
   ocfleet report --to <url> [opts]       push job state to a remote dashboard
       --token <t>         auth token (env FLEET_INGEST_TOKEN works too)
@@ -284,6 +285,10 @@ const cmds = {
     const job = J.readJob(a._[0]);
     if (!job) return p("unknown job");
     jsonOut(await removeWorktree(job, { force: !!a.flags.force, deleteBranch: a.flags["keep-branch"] ? false : true }));
+  },
+
+  async forget(a) {
+    jsonOut(await J.forget(a._[0], { force: !!a.flags.force }));
   },
 
   async cancel(a) { jsonOut(await J.cancel(a._[0])); },

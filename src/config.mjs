@@ -26,7 +26,11 @@ export const DEFAULTS = {
     failover: true,         // on a provider failure, retry with the profile's next candidate
     maxAttempts: 3,         // hard cap on attempts per job, including the first
     agent: null,            // opencode agent name, e.g. "build" or a custom subagent
-    variant: null           // reasoning effort, e.g. "high" (provider specific)
+    variant: null,          // reasoning effort, e.g. "high" (provider specific)
+    // Housekeeping for ~/.opencode-fleet/jobs: once more finished records than
+    // this pile up, refreshAll() deletes the oldest ones. A job whose worktree
+    // still exists holds unmerged work and is never pruned nor counted. 0 = unlimited.
+    keepJobs: 200
   },
 
   budget: {

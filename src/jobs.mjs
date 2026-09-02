@@ -9,7 +9,7 @@ import { classifyFailure } from "./failover.mjs";
 import { record as recordHealth } from "./health.mjs";
 import { killTree, isAlive } from "./process.mjs";
 import { gitBin } from "./util.mjs";
-import { createWorktree, commitAll, diffSummary, repoRoot, headSha } from "./worktree.mjs";
+import { createWorktree, commitAll, diffSummary, repoRoot, headSha, removeWorktree } from "./worktree.mjs";
 import { buildWorkerPrompt, buildFollowupPrompt } from "./prompt.mjs";
 
 export const jobsDir = () => ensureDir(path.join(stateDir(), "jobs"));
@@ -516,6 +516,44 @@ export async function refresh(id) {
   return saveJob(job);
 }
 
+/** A record may only be pruned when it is finished AND no working copy is left:
+ *  a worktree on disk holds unmerged work the user has not landed yet. */
+function prunableIds() {
+  const out = [];
+  for (const id of listJobIds()) {
+    const job = readJob(id);
+    if (!job) continue;
+    if (job.state === "running" || job.state === "queued") continue;
+    const wt = job.worktree;
+    if (wt?.mode === "worktree" && wt.path && fs.existsSync(wt.path)) continue;
+    out.push(id);
+  }
+  return out;
+}
+
+/** Core of pruneJobRecords, returning the ids it removed so refreshAll can drop
+ *  them from its result without rescanning the store. */
+async function pruneJobIds(cfg) {
+  const keep = Number(cfg?.defaults?.keepJobs);
+  if (!(keep > 0)) return [];   // 0 means unlimited
+  // Only prunable records count against the limit, so a pile of unmerged
+  // worktrees cannot push finished jobs out of the store.
+  const newestFirst = prunableIds().map(readJob).filter(Boolean)
+    .sort((a, b) => (b.startedMs ?? b.queuedAt ?? 0) - (a.startedMs ?? a.queuedAt ?? 0));
+  const gone = newestFirst.slice(keep);
+  for (const job of gone) {
+    // The record only — a prunable job has no working copy left, and a branch
+    // that still exists may hold committed work, so it is never touched here.
+    fs.rmSync(jobDir(job.id), { recursive: true, force: true });
+  }
+  return gone.map((j) => j.id);
+}
+
+/** Delete the oldest finished job records past cfg.defaults.keepJobs. Returns how many. */
+export async function pruneJobRecords(cfg) {
+  return (await pruneJobIds(cfg)).length;
+}
+
 export async function refreshAll({ fillQueue = true } = {}) {
   const out = [];
   for (const id of listJobIds()) {
@@ -525,9 +563,15 @@ export async function refreshAll({ fillQueue = true } = {}) {
   // a finished job frees a slot — hand it to whoever has been waiting longest
   if (fillQueue && queuedJobs().length) {
     await startQueued();
-    return listJobIds().map(readJob).filter(Boolean);
+    out.length = 0;
+    out.push(...listJobIds().map(readJob).filter(Boolean));
   }
-  return out;
+  // Prune after the queue drained, so jobs startQueued() just started are running
+  // and never prunable. keepJobs bounds the shared jobs store, so it is read once
+  // from the fleet home's global config — loading per job (sourceRepo) would be a
+  // file read per job, and a per-repo override has no scope over a global store.
+  const pruned = await pruneJobIds(loadConfig());
+  return pruned.length ? out.filter((j) => !pruned.includes(j.id)) : out;
 }
 
 export function jobView(job, { verbose = false } = {}) {
@@ -609,6 +653,27 @@ export async function cancel(id) {
   job.durationMs = job.endedMs - job.startedMs;
   saveJob(job);
   return { ok: true, jobId: id, state: "cancelled" };
+}
+
+/**
+ * Forget a job entirely: worktree, branch and the record itself. This is the one
+ * operation here that cannot be undone, so it refuses a running job unless forced.
+ */
+export async function forget(jobId, { force = false } = {}) {
+  const job = readJob(jobId);
+  if (!job) return { error: `unknown job ${jobId}` };
+  if (job.state === "running") {
+    if (!force) return { error: `job ${jobId} is still running`, hint: "cancel it first, or pass force" };
+    await cancel(jobId);
+  }
+  // A missing worktree must not stop the record from being deleted.
+  let removedWorktree = null;
+  try {
+    const r = await removeWorktree(job, { force: true });
+    if (r?.removed) removedWorktree = r.removed;
+  } catch {}
+  fs.rmSync(jobDir(jobId), { recursive: true, force: true });
+  return { ok: true, jobId, removedWorktree };
 }
 
 /** Continue a finished job in the same session and the same worktree. */

@@ -1,5 +1,5 @@
 import os from "node:os";
-import { refreshAll, jobView, readJob, cancel } from "./jobs.mjs";
+import { refreshAll, jobView, readJob, cancel, forget } from "./jobs.mjs";
 import { diffSummary, removeWorktree } from "./worktree.mjs";
 import { truncate } from "./util.mjs";
 
@@ -77,6 +77,10 @@ export async function report({ to, token, host, intervalSec = 5, once = false, l
             const r = await removeWorktree(job, { force: true });
             if (r?.ok === false) { ok = false; error = r.error; }
           }
+        } else if (cmd.action === "forget") {
+          executed++;
+          const r = await forget(cmd.jobId, { force: true });
+          if (r?.error) { ok = false; error = r.error; }
         } else {
           // unknown action: acknowledge as failed, do not guess
           ok = false;

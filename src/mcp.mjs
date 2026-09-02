@@ -97,8 +97,8 @@ const TOOLS = [
   },
   {
     name: "fleet_cleanup",
-    description: "Remove a job's worktree and branch once you are done with it.",
-    inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, force: { type: "boolean", description: "Discard uncommitted worker changes" }, deleteBranch: { type: "boolean", description: "Default true" } } }
+    description: "Remove a job's worktree and branch once you are done with it. With purge:true the job record itself is deleted too, so the job disappears from fleet_status and the dashboard — use only after the branch is merged or no longer wanted.",
+    inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, force: { type: "boolean", description: "Discard uncommitted worker changes" }, deleteBranch: { type: "boolean", description: "Default true" }, purge: { type: "boolean", description: "Also delete the job record itself, so it disappears from status and the dashboard" } } }
   },
   {
     name: "fleet_models",
@@ -198,6 +198,7 @@ async function callTool(name, a = {}) {
     case "fleet_cleanup": {
       const job = J.readJob(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
+      if (a.purge) return await J.forget(a.jobId, { force: a.force });
       return await removeWorktree(job, { force: a.force, deleteBranch: a.deleteBranch !== false });
     }
 
