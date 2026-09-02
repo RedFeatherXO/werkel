@@ -71,7 +71,9 @@ Escalate on failure rather than starting expensive.
 
 If a profile reports nothing usable, call `fleet_models` with `suggest: true` — it
 proposes candidate lists built from the providers this machine is authenticated for,
-which the user can apply with `ocfleet suggest --write`.
+which the user can apply with `ocfleet suggest --write` (or `node bin/ocfleet.mjs
+suggest --write` — the short command exists only if it was registered at install
+time, so mention both when you tell someone to run it).
 
 ## Reviewing
 
@@ -86,6 +88,33 @@ Read the patch, not the summary. Watch for the classic worker failure modes:
 
 `fleet_logs` shows every tool call the worker made; use it whenever the diff and
 the report disagree, or a job failed.
+
+## Parallel work, honestly
+
+**Send as many jobs as the work has.** Nothing is ever refused for being the
+eleventh: past `defaults.maxConcurrentJobs` (8) a job comes back as
+`state: "queued"` with a `queuePosition`, and starts by itself the moment a slot
+frees up. `fleet_status` lists the queue separately, and `fleet_wait` moves it
+along while you wait — you never have to poke it.
+
+The limit is not a budget guard (that is `budget`, and it is a hard stop). It
+protects the machine: every worker is one opencode process **and** one full git
+worktree on disk, and providers rate-limit parallel requests from one key. Two
+things follow:
+
+- **Free endpoints collapse under parallel load.** A measured run: ten jobs on
+  `glm-5.2:free`, three died with HTTP 429 "temporarily rate-limited upstream",
+  one worker vanished mid-run. The failover recovered some of them, but the
+  throughput was worse than running them one at a time. For anything parallel,
+  use `cheap` — ten small jobs on glm-5.3-flash cost a few cents, and they
+  actually finish.
+- **The limit is per machine, not per profile.** Ten workers means ten opencode
+  processes reading files and running tests on the same disk.
+
+A queued job pins its base commit at submission time, so ten jobs sent against
+one state all see that state, however long the last one waits. Pass
+`maxConcurrent` on a single `fleet_delegate` call to hold that job to a tighter
+limit than the config's — the queue honours it later too.
 
 ## Cost discipline
 
@@ -102,6 +131,7 @@ the full context again.
 | `no candidate of profile X is usable` | provider not authenticated or ids changed | `fleet_doctor`, then `opencode auth login` |
 | job state `timeout` | model hung, or the task was too big | split the task, raise `timeoutSec`, or escalate the profile |
 | `previousAttempts` non-empty | the provider failed and the job moved to the next candidate by itself | nothing — but if it happens on every job, check `fleet_doctor`; a provider you pay for may be down |
+| the model used is not the profile's first candidate | that one failed recently and is in its cooldown | nothing; it is tried again after 30 minutes, or immediately after it succeeds once |
 | `no fallback candidate left` | every model in the profile failed | usually not the models: check credentials, network, or the daily budget |
 | `merge failed: CONFLICT` | two jobs touched the same file | `fleet_apply` with `mode:"patch"` and resolve, or re-delegate one job on the updated base |
 | empty diff but state `done` | worker only talked | read `fleet_logs`; re-delegate with a sharper task and a `verify` command |

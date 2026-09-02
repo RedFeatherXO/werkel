@@ -28,9 +28,11 @@ async function snapshot(job) {
   v.repo = job.sourceRepo;
   v.startedMs = job.startedMs;
   v.endedMs = job.endedMs;
+  v.queuedAt = job.queuedAt ?? null;
   if (v.report) v.report = truncate(v.report, MAX_REPORT_CHARS);
-  // the patch is far too big for the wire — stat and file list suffice
-  if (job.state !== "running") {
+  // the patch is far too big for the wire — stat and file list suffice.
+  // A queued job has no working copy yet, so there is nothing to diff.
+  if (job.state !== "running" && job.state !== "queued") {
     const d = await diffSummary(job, { maxChars: 0 }).catch(() => null);
     if (d && !d.error) { v.diffstat = d.stat; v.changedFiles = d.files; }
   }

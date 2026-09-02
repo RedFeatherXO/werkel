@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Run the fleet CLI from this folder: ./ocfleet doctor
+exec node "$(dirname "$0")/bin/ocfleet.mjs" "$@"

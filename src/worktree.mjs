@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { run, expandHome, ensureDir, truncate } from "./util.mjs";
+import { run, expandHome, ensureDir, truncate, gitBin } from "./util.mjs";
 
-const git = (dir, args, opts = {}) => run("git", ["-C", dir, ...args], opts);
+const git = (dir, args, opts = {}) => run(gitBin(), ["-C", dir, ...args], opts);
 
 export async function repoRoot(dir) {
   const r = await git(dir, ["rev-parse", "--show-toplevel"]);
@@ -70,11 +70,11 @@ export async function diffSummary(job, { maxChars = 12000 } = {}) {
   const untracked = await git(wt.path, ["ls-files", "--others", "--exclude-standard"]);
   return {
     stat: stat.stdout.trim() || "(no committed changes)",
-    files: names.stdout.trim().split("\n").filter(Boolean).map((l) => {
+    files: names.stdout.trim().split(/\r?\n/).filter(Boolean).map((l) => {
       const [status, ...rest] = l.split("\t");
-      return { status, path: rest.join("\t") };
+      return { status: status.trim(), path: rest.join("\t").trim() };
     }),
-    uncommitted: untracked.stdout.trim().split("\n").filter(Boolean),
+    uncommitted: untracked.stdout.trim().split(/\r?\n/).filter(Boolean),
     patch: truncate(patch.stdout, maxChars, `\n… [diff truncated — full patch: git -C ${wt.path} diff ${range}]`),
     patchBytes: patch.stdout.length,
     worktreePath: wt.path,
@@ -136,5 +136,5 @@ export async function removeWorktree(job, { deleteBranch = true, force = false }
 
 export async function listFleetBranches(repo) {
   const r = await git(repo, ["branch", "--list", "fleet/*", "--format=%(refname:short)"]);
-  return r.ok ? r.stdout.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+  return r.ok ? r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : [];
 }

@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { stateDir, ensureDir, readJson, writeJson, newId, expandHome, truncate, humanDuration, run, resolveBin } from "./util.mjs";
 import { loadConfig } from "./config.mjs";
 import { resolveModel, openrouterCatalog, modelsDevCatalog, installedModelsSmart, budgetCheck, spentToday, recordSpend, estimateCost, priceInfo } from "./models.mjs";
 import { classifyFailure } from "./failover.mjs";
-import { createWorktree, commitAll, diffSummary, repoRoot } from "./worktree.mjs";
+import { record as recordHealth } from "./health.mjs";
+import { killTree, isAlive } from "./process.mjs";
+import { gitBin } from "./util.mjs";
+import { createWorktree, commitAll, diffSummary, repoRoot, headSha } from "./worktree.mjs";
 import { buildWorkerPrompt, buildFollowupPrompt } from "./prompt.mjs";
 
 export const jobsDir = () => ensureDir(path.join(stateDir(), "jobs"));
@@ -25,10 +29,7 @@ export function listJobIds() {
   catch { return []; }
 }
 
-function alive(pid) {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch { return false; }
-}
+const alive = isAlive;
 
 // ---- event parsing --------------------------------------------------------
 
@@ -41,7 +42,7 @@ export function parseEvents(id, dir) {
   const out = { sessionId: null, text: "", tools: [], tokens: { input: 0, output: 0, reasoning: 0 }, cost: 0, steps: 0, errors: [], eventCount: 0 };
   let raw = "";
   try { raw = fs.readFileSync(file, "utf8"); } catch { return out; }
-  for (const line of raw.split("\n")) {
+  for (const line of raw.split(/\r?\n/)) {
     const s = line.trim();
     if (!s.startsWith("{")) continue;
     let e; try { e = JSON.parse(s); } catch { continue; }
@@ -92,9 +93,20 @@ export function runningJobs() {
   return listJobIds().map(readJob).filter((j) => j && j.state === "running" && alive(j.pid));
 }
 
+export function queuedJobs() {
+  return listJobIds().map(readJob).filter((j) => j?.state === "queued")
+    .sort((a, b) => (a.queuedAt ?? 0) - (b.queuedAt ?? 0));
+}
+
 /**
  * Start a delegated job. Returns immediately — opencode keeps running detached,
  * so a long job survives an MCP server restart and never blocks a tool call.
+ *
+ * Past the concurrency limit a job is queued, not refused. The limit protects the
+ * machine (one opencode process and one full working copy per job, plus provider
+ * rate limits), not the wallet — the budget guard does that. So the honest answer
+ * to an eleventh job is "in a moment", not "no": whoever sends ten tasks wants ten
+ * tasks done, not six confirmations and four rejections to keep track of.
  */
 export async function delegate(input) {
   const dirIn = expandHome(input.repo || input.dir || process.cwd());
@@ -105,13 +117,13 @@ export async function delegate(input) {
   if (!input.task?.trim()) return { error: "task is required" };
   if (input.task.length > cfg.limits.promptCharsMax) return { error: `task too long (${input.task.length} chars, max ${cfg.limits.promptCharsMax})` };
 
+  // Settle every job first: this fires pending failovers, so the count below
+  // reflects what will actually be running a moment from now, not what was
+  // running before the last worker died. No queue draining here — this job
+  // takes its place in line like any other.
+  await refreshAll({ fillQueue: false });
   const running = runningJobs();
   const maxConc = input.maxConcurrent ?? d.maxConcurrentJobs;
-  if (running.length >= maxConc) {
-    return { error: `concurrency limit reached (${running.length}/${maxConc} jobs running)`,
-      running: running.map((j) => ({ id: j.id, model: j.model, title: j.title })),
-      hint: "wait for a job (fleet_wait) or raise defaults.maxConcurrentJobs" };
-  }
 
   const spend = spentToday();
   const orCatalog = await openrouterCatalog().catch(() => ({}));
@@ -138,18 +150,15 @@ export async function delegate(input) {
   const id = newId();
   const dir0 = ensureDir(jobDir(id));
 
+  // Pin the base commit now rather than at start time. Ten jobs sent against one
+  // state should all see that state, however long the last of them waits.
   const useWorktree = input.worktree ?? d.worktree;
-  let wt = { mode: "in-place", path: dirIn, branch: null };
-  if (useWorktree) {
-    wt = await createWorktree(dirIn, id, cfg, { baseRef: input.baseRef });
-    if (wt.mode === "error") return { error: wt.error };
-  } else if (await repoRoot(dirIn)) {
-    wt.repo = await repoRoot(dirIn);
-  }
+  const root = await repoRoot(dirIn);
+  const baseRef = input.baseRef ?? (useWorktree && root ? await headSha(dirIn) : null);
 
   const job = {
     id,
-    state: "running",
+    state: "queued",
     title: input.title || truncate(input.task.split("\n")[0], 70, "…"),
     task: input.task,
     context: input.context ?? null,
@@ -166,75 +175,179 @@ export async function delegate(input) {
     maxAttempts: input.maxAttempts ?? cfg.defaults.maxAttempts ?? 3,
     profile: input.profile ?? (input.model ? null : cfg.defaults.profile),
     price: picked.price,
-    dir: wt.path,
-    sourceRepo: wt.repo ?? dirIn,
-    worktree: wt,
+    // Everything startJob() needs later, so a queued job never has to reach back
+    // into the call that created it.
+    useWorktree,
+    baseRef,
+    autoApprove: input.autoApprove ?? d.autoApprove,
+    attach: input.attach ?? [],
+    // A cap named on the call belongs to the job, not to the moment: the drainer
+    // has to honour it later too, or the limit would only hold until the first refresh.
+    maxConcurrent: maxConc,
+    repoDir: dirIn,
+    dir: dirIn,                 // replaced by the worktree path when the job starts
+    sourceRepo: root ?? dirIn,
+    worktree: null,
     agent: input.agent ?? d.agent,
     variant: input.variant ?? d.variant,
     timeoutSec: input.timeoutSec ?? d.timeoutSec,
     autoCommit: input.autoCommit ?? d.autoCommit,
     createdAt: new Date().toISOString(),
-    startedMs: Date.now(),
+    queuedAt: Date.now(),
+    startedMs: null,
     jobDir: dir0
   };
-
-  const prompt = buildWorkerPrompt(job);
-  fs.writeFileSync(path.join(dir0, "prompt.md"), prompt);
-
-  const args = ["run", "--format", "json", "--dir", job.dir, "--title", `fleet ${id}`];
-  if (input.autoApprove ?? d.autoApprove) args.push("--auto");
-  if (job.model) args.push("--model", job.model);
-  if (job.agent) args.push("--agent", job.agent);
-  if (job.variant) args.push("--variant", job.variant);
-  for (const f of input.attach ?? []) args.push("-f", f);
-  args.push(prompt);
-
-  const started = launch(job, cfg, args, { readOnly: job.readOnly });
-  job.pid = started.pid;
-  job.cmdFile = started.script;
   saveJob(job);
 
-  return {
+  const common = {
     jobId: id,
     model: job.model,
     why: picked.why,
     price: picked.price ? `$${picked.price.prompt}/$${picked.price.completion} per Mtok` : "unknown",
-    worktree: wt.mode === "worktree" ? { path: wt.path, branch: wt.branch, base: wt.base } : { mode: wt.mode, path: wt.path, warning: wt.warning },
     timeoutSec: job.timeoutSec,
     fallbacks: candidates.length > 1 ? candidates.slice(1) : undefined,
     warning: picked.warning,
-    spentTodayUsd: spend.total ?? 0,
+    note2: picked.deprioritised,
+    spentTodayUsd: spend.total ?? 0
+  };
+
+  if (running.length >= maxConc) {
+    const ahead = queuedJobs().filter((j) => j.id !== id && (j.queuedAt ?? 0) < job.queuedAt).length;
+    return {
+      ...common,
+      state: "queued",
+      queuePosition: ahead + 1,
+      runningNow: running.length,
+      note: `all ${maxConc} worker slots are busy — this job starts by itself as soon as one frees up; poll with fleet_status / fleet_wait`
+    };
+  }
+
+  const err = await startJob(job, cfg);
+  if (err) return { error: err, jobId: id };
+
+  const wt = job.worktree ?? { mode: "in-place", path: job.dir };
+  return {
+    ...common,
+    state: "running",
+    worktree: wt.mode === "worktree"
+      ? { path: wt.path, branch: wt.branch, base: wt.base }
+      : { mode: wt.mode, path: wt.path, warning: wt.warning },
     note: "job runs detached — poll with fleet_status / fleet_wait, then review with fleet_diff"
   };
 }
 
-/** Write a small shell wrapper so the job outlives this process and enforces its own timeout. */
-function launch(job, cfg, args, { readOnly } = {}) {
+/**
+ * Take a queued job and actually run it: create the working copy, write the
+ * prompt, spawn the worker. Mutates and saves `job`. Returns an error string on
+ * failure, otherwise nothing — the caller decides how loudly to report it.
+ *
+ * The worktree is created here, not at delegate() time, so a hundred queued jobs
+ * cost a hundred small JSON files rather than a hundred checkouts of the repo.
+ */
+async function startJob(job, cfg) {
   const dir0 = job.jobDir;
-  const script = path.join(dir0, "run.sh");
-  const quoted = args.map((a) => `'${String(a).replace(/'/g, `'\\''`)}'`).join(" ");
-  const env = [];
-  if (readOnly) {
-    const inline = JSON.stringify({ permission: { edit: "deny", write: "deny", bash: "ask", patch: "deny" } });
-    env.push(`export OPENCODE_CONFIG_CONTENT='${inline.replace(/'/g, `'\\''`)}'`);
+
+  let wt = { mode: "in-place", path: job.repoDir ?? job.dir, branch: null };
+  if (job.useWorktree) {
+    wt = await createWorktree(job.repoDir ?? job.dir, job.id, cfg, { baseRef: job.baseRef });
+    if (wt.mode === "error") {
+      job.state = "failed";
+      job.error = wt.error;
+      job.endedMs = Date.now();
+      saveJob(job);
+      return wt.error;
+    }
   }
-  const body = `#!/bin/sh
-# opencode-fleet job ${job.id}
-cd '${job.dir.replace(/'/g, `'\\''`)}' || exit 97
-${env.join("\n")}
-'${resolveBin(cfg)}' ${quoted} > '${dir0}/events.ndjson' 2> '${dir0}/stderr.log' &
-child=$!
-( sleep ${Number(job.timeoutSec) || 1200}; kill -TERM $child 2>/dev/null; sleep 5; kill -KILL $child 2>/dev/null; echo timeout > '${dir0}/timeout' ) &
-watcher=$!
-wait $child
-code=$?
-kill $watcher 2>/dev/null
-echo $code > '${dir0}/exit'
-`;
-  fs.writeFileSync(script, body, { mode: 0o755 });
-  const child = spawn("/bin/sh", [script], { detached: true, stdio: "ignore", cwd: job.dir });
+  job.worktree = wt;
+  job.dir = wt.path;
+  job.sourceRepo = wt.repo ?? job.sourceRepo ?? job.repoDir;
+
+  const prompt = buildWorkerPrompt(job);
+  const promptFile = path.join(dir0, "prompt.md");
+  fs.writeFileSync(promptFile, prompt);
+
+  const args = ["run", "--format", "json", "--dir", job.dir, "--title", `fleet ${job.id}`];
+  if (job.autoApprove) args.push("--auto");
+  if (job.model) args.push("--model", job.model);
+  if (job.agent) args.push("--agent", job.agent);
+  if (job.variant) args.push("--variant", job.variant);
+  for (const f of job.attach ?? []) args.push("-f", f);
+  // no prompt in argv — it arrives on stdin
+
+  const started = launch(job, cfg, args, { readOnly: job.readOnly, stdinFile: promptFile });
+  if (!started?.pid) {
+    job.state = "failed";
+    job.error = "could not spawn the worker process";
+    job.endedMs = Date.now();
+    saveJob(job);
+    return job.error;
+  }
+
+  job.pid = started.pid;
+  job.specFile = started.script;
+  job.state = "running";
+  job.startedMs = Date.now();
+  job.startedAt = new Date().toISOString();
+  job.waitedMs = job.queuedAt ? job.startedMs - job.queuedAt : 0;
+  saveJob(job);
+  return null;
+}
+
+/**
+ * Start as many waiting jobs as there is room for, oldest first. Called after
+ * every refresh, so a finished job pulls the next one in without anybody asking.
+ */
+export async function startQueued() {
+  const waiting = queuedJobs();
+  if (!waiting.length) return [];
+  const started = [];
+  let slots = 0;
+  for (const job of waiting) {
+    const cfg = loadConfig(job.repoDir ?? job.sourceRepo ?? job.dir);
+    const maxConc = job.maxConcurrent ?? cfg.defaults.maxConcurrentJobs;
+    // Recount every time: a job spawned a moment ago is already occupying a slot.
+    // `continue`, not `break` — a job waiting on a tight cap of its own must not
+    // block the ones behind it that were sent with room to spare.
+    if (runningJobs().length >= maxConc) continue;
+    const err = await startJob(job, cfg);
+    if (!err) started.push({ id: job.id, model: job.model, title: job.title });
+    // Count starts, not scans: skipping a job with a tight cap of its own must not
+    // eat the budget for the ones behind it.
+    if (++slots > 32) break;   // paranoia: never turn a full queue into a fork bomb
+  }
+  return started;
+}
+
+/**
+ * Start one attempt detached, via the platform-neutral runner. The command is
+ * handed over as an argv array in a JSON spec — nothing is ever pasted into a
+ * shell, so paths with spaces, quotes or backslashes are simply not a problem.
+ */
+function launch(job, cfg, args, { readOnly, stdinFile } = {}) {
+  const dir0 = job.jobDir;
+  const spec = {
+    bin: resolveBin(cfg),
+    args,
+    stdinFile: stdinFile ?? null,
+    cwd: job.dir,
+    outDir: dir0,
+    timeoutSec: Number(job.timeoutSec) || 1200,
+    env: readOnly
+      ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { edit: "deny", write: "deny", bash: "ask", patch: "deny" } }) }
+      : {}
+  };
+  const specFile = path.join(dir0, "run.json");
+  fs.writeFileSync(specFile, JSON.stringify(spec, null, 2));
+
+  const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "runner.mjs");
+  const child = spawn(process.execPath, [runner, specFile], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+    cwd: job.dir
+  });
   child.unref();
-  return { pid: child.pid, script };
+  return { pid: child.pid, script: specFile };
 }
 
 /**
@@ -247,21 +360,22 @@ async function relaunch(job, why) {
 
   // the failed attempt produced nothing, but make sure of it before reusing the tree
   if (job.worktree?.mode === "worktree") {
-    await run("git", ["-C", job.dir, "reset", "--hard", "-q"]).catch(() => {});
-    await run("git", ["-C", job.dir, "clean", "-fdq"]).catch(() => {});
+    const g = gitBin(cfg);
+    await run(g, ["-C", job.dir, "reset", "--hard", "-q"]).catch(() => {});
+    await run(g, ["-C", job.dir, "clean", "-fdq"]).catch(() => {});
   }
 
   const prompt = buildWorkerPrompt(job);
-  fs.writeFileSync(path.join(dir0, "prompt.md"), prompt);
+  const promptFile = path.join(dir0, "prompt.md");
+  fs.writeFileSync(promptFile, prompt);
 
   const args = ["run", "--format", "json", "--dir", job.dir, "--title", `fleet ${job.id} (attempt ${job.attemptIndex + 1})`];
   if (cfg.defaults.autoApprove) args.push("--auto");
   args.push("--model", job.model);
   if (job.agent) args.push("--agent", job.agent);
   if (job.variant) args.push("--variant", job.variant);
-  args.push(prompt);
 
-  const started = launch({ ...job, jobDir: dir0 }, cfg, args, { readOnly: job.readOnly });
+  const started = launch({ ...job, jobDir: dir0 }, cfg, args, { readOnly: job.readOnly, stdinFile: promptFile });
   if (!started?.pid) return false;
 
   job.jobDir = dir0;
@@ -283,7 +397,7 @@ export async function refresh(id) {
   if (!id || typeof id !== "string") return null;
   const job = readJob(id);
   if (!job) return null;
-  if (job.state !== "running") return job;
+  if (job.state !== "running") return job;   // queued jobs are started by startQueued()
 
   const exitFile = path.join(job.jobDir, "exit");
   const timedOut = fs.existsSync(path.join(job.jobDir, "timeout"));
@@ -291,10 +405,21 @@ export async function refresh(id) {
 
   if (!finished) {
     if (!alive(job.pid)) {
-      // wrapper died without writing an exit code
+      // The runner died without writing an exit code. Whatever it managed to say
+      // belongs in the error itself — otherwise the only way to find out is to
+      // go digging in the job directory.
+      let tail = "";
+      try {
+        tail = fs.readFileSync(path.join(job.jobDir, "stderr.log"), "utf8").trim().split(/\r?\n/).slice(-4).join(" | ");
+      } catch {}
+      if (!tail) {
+        const ev0 = parseEvents(id, job.jobDir);
+        tail = ev0.errors.slice(-2).join(" | ") || (ev0.eventCount ? `no error text; ${ev0.eventCount} events, last tools: ${toolSummary(ev0.tools)}` : "no output at all");
+      }
       job.state = "failed";
-      job.error = "worker process vanished (check stderr.log)";
+      job.error = `worker process vanished: ${truncate(tail, 600)}`;
       job.endedMs = Date.now();
+      job.durationMs = job.endedMs - job.startedMs;
       return saveJob(job);
     }
     return job; // still running
@@ -326,12 +451,14 @@ export async function refresh(id) {
     job.error = truncate(ev.errors.join("; "), 1500);
   } else {
     job.state = "done";
+    recordHealth(job.model, "ok");
   }
 
   // A job that died before producing anything is usually the provider's fault,
   // not the task's — move to the next candidate instead of surfacing a failure.
   if ((job.state === "failed" || job.state === "timeout") && job.failover) {
     const verdict = classifyFailure(job, ev);
+    if (verdict.category === "provider") recordHealth(job.model, "provider-error", verdict.reason);
     const nextModel = (job.candidates ?? [])[job.attemptIndex + 1];
     const attemptsLeft = (job.attempts?.length ?? 0) + 1 < (job.maxAttempts ?? 3);
     if (verdict.retryable && nextModel && attemptsLeft) {
@@ -358,11 +485,16 @@ export async function refresh(id) {
   return saveJob(job);
 }
 
-export async function refreshAll() {
+export async function refreshAll({ fillQueue = true } = {}) {
   const out = [];
   for (const id of listJobIds()) {
     const j = await refresh(id);
     if (j) out.push(j);
+  }
+  // a finished job frees a slot — hand it to whoever has been waiting longest
+  if (fillQueue && queuedJobs().length) {
+    await startQueued();
+    return listJobIds().map(readJob).filter(Boolean);
   }
   return out;
 }
@@ -371,11 +503,12 @@ export function jobView(job, { verbose = false } = {}) {
   const v = {
     jobId: job.id,
     state: job.state,
+    durationMs: job.durationMs ?? (job.endedMs && job.startedMs ? job.endedMs - job.startedMs : null),
     title: job.title,
     model: job.model,
     dir: job.dir,
     branch: job.worktree?.branch ?? null,
-    duration: humanDuration(job.durationMs ?? (job.state === "running" ? Date.now() - job.startedMs : null)),
+    duration: job.state === "queued" ? "waiting" : humanDuration(job.durationMs ?? (job.state === "running" ? Date.now() - job.startedMs : null)),
     costUsd: job.costUsd != null ? Number(job.costUsd.toFixed(4)) : null,
     costEstimated: job.costEstimated ?? undefined,
     tools: job.toolSummary ?? undefined,
@@ -401,16 +534,24 @@ export function jobView(job, { verbose = false } = {}) {
 export async function waitFor(ids, { timeoutSec = 120, pollMs = 2000 } = {}) {
   const deadline = Date.now() + timeoutSec * 1000;
   const clean = (ids ?? []).filter((i) => typeof i === "string" && i);
-  const targets = clean.length ? clean : runningJobs().map((j) => j.id);
+  const targets = clean.length ? clean : [...runningJobs(), ...queuedJobs()].map((j) => j.id);
   if (!targets.length) return { done: [], stillRunning: [], note: "no running jobs" };
   for (;;) {
     const states = [];
     for (const id of targets) states.push(await refresh(id));
-    const pending = states.filter((j) => j?.state === "running");
+    // Waiting is the one thing a manager does while jobs run, so the queue has to
+    // move here too. Without this, waiting on a queued job would wait for someone
+    // else to call fleet_status — i.e. forever.
+    if (queuedJobs().length) {
+      await startQueued();
+      for (let i = 0; i < targets.length; i++) states[i] = readJob(targets[i]) ?? states[i];
+    }
+    const pending = states.filter((j) => j?.state === "running" || j?.state === "queued");
     if (!pending.length || Date.now() > deadline) {
       return {
-        done: states.filter((j) => j && j.state !== "running").map((j) => jobView(j)),
+        done: states.filter((j) => j && j.state !== "running" && j.state !== "queued").map((j) => jobView(j)),
         stillRunning: pending.map((j) => jobView(j)),
+        stillQueued: pending.filter((j) => j.state === "queued").length || undefined,
         timedOutWaiting: pending.length > 0
       };
     }
@@ -422,8 +563,9 @@ export async function cancel(id) {
   const job = readJob(id);
   if (!job) return { error: `unknown job ${id}` };
   if (job.state !== "running") return { ok: true, note: `job already ${job.state}` };
-  try { process.kill(job.pid, "SIGTERM"); } catch {}
-  await run("pkill", ["-P", String(job.pid)]).catch(() => {});
+  // the runner is the process group leader; killTree takes the worker with it
+  killTree(job.pid, "SIGTERM");
+  setTimeout(() => killTree(job.pid, "SIGKILL"), 3000).unref();
   job.state = "cancelled";
   job.endedMs = Date.now();
   job.durationMs = job.endedMs - job.startedMs;
@@ -442,16 +584,16 @@ export async function followup(id, message, opts = {}) {
   const round = (job.rounds ?? 1) + 1;
   const dir0 = ensureDir(path.join(job.jobDir, `round${round}`));
   const prompt = buildFollowupPrompt(message, job);
-  fs.writeFileSync(path.join(dir0, "prompt.md"), prompt);
+  const promptFile = path.join(dir0, "prompt.md");
+  fs.writeFileSync(promptFile, prompt);
 
   const args = ["run", "--format", "json", "--dir", job.dir, "--session", job.sessionId];
   if (opts.autoApprove ?? cfg.defaults.autoApprove) args.push("--auto");
   if (opts.model || job.model) args.push("--model", opts.model || job.model);
   if (job.agent) args.push("--agent", job.agent);
-  args.push(prompt);
 
   const sub = { ...job, jobDir: dir0, timeoutSec: opts.timeoutSec ?? job.timeoutSec };
-  const started = launch(sub, cfg, args, { readOnly: job.readOnly });
+  const started = launch(sub, cfg, args, { readOnly: job.readOnly, stdinFile: promptFile });
 
   job.rounds = round;
   job.state = "running";

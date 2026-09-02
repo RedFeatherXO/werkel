@@ -13,7 +13,9 @@ import { applyJob, removeWorktree, diffSummary } from "../src/worktree.mjs";
 import { doctor } from "../src/doctor.mjs";
 import { report } from "../src/reporter.mjs";
 import { serve } from "../src/mcp.mjs";
-import { usd, humanDuration } from "../src/util.mjs";
+import { createRequire } from "node:module";
+const require$ = createRequire(import.meta.url);
+import { usd, humanDuration, SYM, run } from "../src/util.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -36,8 +38,16 @@ function parseArgs(argv) {
 const p = (...a) => console.log(...a);
 const jsonOut = (o) => p(JSON.stringify(o, null, 2));
 
+function openInBrowser(url) {
+  const { spawn } = require$("node:child_process");
+  const cmd = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]]
+    : process.platform === "darwin" ? ["open", [url]]
+    : ["xdg-open", [url]];
+  try { spawn(cmd[0], cmd[1], { detached: true, stdio: "ignore", windowsHide: true }).unref(); } catch {}
+}
+
 function stateIcon(s) {
-  return { running: "▶", done: "✓", failed: "✗", timeout: "⏱", cancelled: "⊘" }[s] ?? "·";
+  return { running: SYM.run, done: SYM.done, failed: SYM.failed, timeout: SYM.timeout, cancelled: SYM.cancelled, queued: SYM.dot }[s] ?? SYM.dot;
 }
 
 function printJobs(list) {
@@ -78,6 +88,13 @@ ocfleet — delegate coding jobs from Claude to OpenCode workers on cheaper mode
       --token <t>         auth token (env FLEET_INGEST_TOKEN works too)
       --interval <sec>    seconds between cycles (default 5)
       --once              one cycle and exit (for cron and tests)
+  ocfleet probe [--profile n] [--all]    check which models actually answer right now
+  ocfleet health [--reset]               what the fleet learned about model availability
+  ocfleet dashboard [opts]               run the dashboard on this machine, no server needed
+      --port <n>          default 7777
+      --host <addr>       default 127.0.0.1 (use 0.0.0.0 to reach it from the LAN)
+      --open              open it in your browser
+      --interval <sec>    how often to refresh, default 3
   ocfleet mcp                            run as an MCP stdio server (for Claude)
   ocfleet install [--scope user|project|print]   register the MCP server with Claude Code
   ocfleet init-config [--force]          write a starter fleet.config.json
@@ -87,23 +104,23 @@ const cmds = {
   async doctor(a) {
     const r = await doctor({ repo: path.resolve(a.flags.repo ?? process.cwd()), warmup: !!a.flags.warmup });
     if (a.flags.json) return jsonOut(r);
-    p(`\n${r.ok ? "✓" : "✗"} ${r.summary}\n`);
+    p(`\n${r.ok ? SYM.ok : SYM.fail} ${r.summary}\n`);
     p(`  opencode   ${r.info.opencode} ${r.info.opencodeVersion ?? ""}`);
     p(`  git        ${r.info.git}`);
     p(`  node       ${r.info.node}`);
     p(`  config     ${(r.info.configSources || []).join(", ")}`);
     p(`  state      ${r.info.stateDir}`);
     p(`  models     ${r.info.installedModelCount ?? 0} configured in opencode`);
-    p(`  budget     ≤ $${r.info.budget.maxPromptUsdPerMTok}/Mtok in, ≤ $${r.info.budget.maxCompletionUsdPerMTok}/Mtok out, ${usd(r.info.spentTodayUsd)} spent today of ${usd(r.info.dailyLimitUsd)}`);
+    p(`  budget     ${SYM.le} $${r.info.budget.maxPromptUsdPerMTok}/Mtok in, ${SYM.le} $${r.info.budget.maxCompletionUsdPerMTok}/Mtok out, ${usd(r.info.spentTodayUsd)} spent today of ${usd(r.info.dailyLimitUsd)}`);
     p("\n  profiles:");
     for (const [name, prof] of Object.entries(r.info.profiles ?? {})) {
-      p(`    ${name.padEnd(12)} ${prof.usable ? "→ " + prof.usable : "✗ nothing usable"}`);
-      if (!prof.usable) for (const c of prof.candidates) p(`      · ${c.model.padEnd(46)} ${c.reason}`);
+      p(`    ${name.padEnd(12)} ${prof.usable ? SYM.arrow + " " + prof.usable : SYM.fail + " nothing usable"}`);
+      if (!prof.usable) for (const c of prof.candidates) p(`      ${SYM.dot} ${c.model.padEnd(46)} ${c.reason}`);
     }
     if (r.info.jobs) p(`\n  jobs       ${r.info.jobs.running} running, ${r.info.jobs.total} total`);
     if (r.info.warmup) p(`  warmup     ${JSON.stringify(r.info.warmup)}`);
-    for (const w of r.warnings) p(`\n  ⚠ ${w}`);
-    for (const e of r.problems) p(`\n  ✗ ${e}`);
+    for (const w of r.warnings) p(`\n  ${SYM.warn} ${w}`);
+    for (const e of r.problems) p(`\n  ${SYM.fail} ${e}`);
     p("");
   },
 
@@ -112,11 +129,11 @@ const cmds = {
     const rows = await allowedModels(cfg, { refresh: !!a.flags.refresh, cwd: path.resolve(a.flags.repo ?? process.cwd()) });
     if (a.flags.json) return jsonOut(rows);
     const show = a.flags.all ? rows : rows.filter((r) => r.allowed);
-    p(`\n  budget: ≤ $${cfg.budget.maxPromptUsdPerMTok}/Mtok input, ≤ $${cfg.budget.maxCompletionUsdPerMTok}/Mtok output, tools required: ${cfg.budget.requireToolSupport}\n`);
+    p(`\n  budget: ${SYM.le} $${cfg.budget.maxPromptUsdPerMTok}/Mtok input, ${SYM.le} $${cfg.budget.maxCompletionUsdPerMTok}/Mtok output, tools required: ${cfg.budget.requireToolSupport}\n`);
     p(`  ${"".padEnd(3)}${"model".padEnd(46)} ${"in".padStart(7)} ${"out".padStart(7)} ${"cap".padStart(5)} ${"value".padStart(6)}  ctx`);
     for (const r of show) {
       const cap = r.capabilitySource === "artificial-analysis" ? String(r.capability) : `~${Math.round(r.capability)}`;
-      p(`  ${r.allowed ? "✓ " : "✗ "} ${r.model.padEnd(46)} ${(r.prompt ?? "?").toString().padStart(7)} ${(r.completion ?? "?").toString().padStart(7)} ${cap.padStart(5)} ${String(r.value ?? "?").padStart(6)}  ${r.context ?? "?"}${r.allowed ? "" : "   ← " + r.reason}`);
+      p(`  ${r.allowed ? SYM.ok + " " : SYM.fail + " "} ${r.model.padEnd(46)} ${(r.prompt ?? "?").toString().padStart(7)} ${(r.completion ?? "?").toString().padStart(7)} ${cap.padStart(5)} ${String(r.value ?? "?").padStart(6)}  ${r.context ?? "?"}${r.allowed ? "" : "   " + SYM.arrow + " " + r.reason}`);
     }
     p(`\n  cap = 0.6·coding + 0.4·agentic (Artificial Analysis, via OpenRouter); ~x means estimated from the name`);
     p(`  value = cap / (1 + blended price), blended = (3·input + output)/4`);
@@ -146,7 +163,7 @@ const cmds = {
     p(`\n  job ${res.jobId}`);
     p(`  model    ${res.model}  (${res.why}, ${res.price})`);
     p(`  worktree ${res.worktree.path ?? "-"}${res.worktree.branch ? "  [" + res.worktree.branch + "]" : ""}`);
-    if (res.worktree.warning) p(`  ⚠ ${res.worktree.warning}`);
+    if (res.worktree.warning) p(`  ${SYM.warn} ${res.worktree.warning}`);
     p(`  follow   ocfleet wait ${res.jobId}   |   ocfleet logs ${res.jobId}\n`);
     if (a.flags.wait) {
       const secs = typeof a.flags.wait === "string" ? Number(a.flags.wait) : 900;
@@ -178,7 +195,7 @@ const cmds = {
     if (fs.existsSync(target)) fs.copyFileSync(target, target + ".bak");
     current.profiles = r.profiles;
     writeJson(target, current);
-    p(`\n  ✓ wrote ${Object.keys(r.profiles).length} profiles to ${target}${fs.existsSync(target + ".bak") ? " (backup: fleet.config.json.bak)" : ""}\n`);
+    p(`\n  ${SYM.ok} wrote ${Object.keys(r.profiles).length} profiles to ${target}${fs.existsSync(target + ".bak") ? " (backup: fleet.config.json.bak)" : ""}\n`);
   },
 
   async status(a) {
@@ -188,8 +205,10 @@ const cmds = {
     }
     const all = await J.refreshAll();
     if (a.flags.json) return jsonOut(all.map((j) => J.jobView(j)));
+    const q = all.filter((j) => j.state === "queued").sort((x, y) => (x.queuedAt ?? 0) - (y.queuedAt ?? 0));
     p("\n  running:"); printJobs(all.filter((j) => j.state === "running").map((j) => J.jobView(j)));
-    p("\n  recent:"); printJobs(all.filter((j) => j.state !== "running").slice(0, Number(a.flags.limit ?? 12)).map((j) => J.jobView(j)));
+    if (q.length) { p(`\n  queued (${q.length} waiting for a free slot):`); printJobs(q.map((j) => J.jobView(j))); }
+    p("\n  recent:"); printJobs(all.filter((j) => j.state !== "running" && j.state !== "queued").slice(0, Number(a.flags.limit ?? 12)).map((j) => J.jobView(j)));
     p(`\n  spent today: ${usd(spentToday().total ?? 0)}\n`);
   },
 
@@ -255,7 +274,7 @@ const cmds = {
 
   async report(a) {
     if (!a.flags.to) {
-      p("missing --to <dashboard-url> — e.g. ocfleet report --to http://minipc:7777");
+      p("missing --to <dashboard-url>, e.g. ocfleet report --to http://minipc:7777");
       process.exitCode = 1;
       return;
     }
@@ -266,6 +285,128 @@ const cmds = {
       once: !!a.flags.once,
       log: (msg) => p(`  ${new Date().toISOString()}  ${msg}`)
     });
+  },
+
+  /**
+   * Local dashboard: the same server and the same reporter as the remote setup,
+   * both in this process, talking over the loopback interface. No second code
+   * path means the remote deployment and this share every line of behaviour.
+   */
+  /**
+   * Ask each candidate to answer one trivial prompt. Free endpoints go down for
+   * minutes at a time, so knowing *before* a real job which ones respond is
+   * worth the few seconds this takes.
+   */
+  async probe(a) {
+    const repo = path.resolve(a.flags.repo ?? process.cwd());
+    const cfg = loadConfig(repo);
+    const { resolveBin, which } = await import("../src/util.mjs");
+    const H = await import("../src/health.mjs");
+    const bin = resolveBin(cfg);
+    if (!which(bin)) { p("opencode not found — run doctor first"); process.exitCode = 1; return; }
+
+    const names = a.flags.profile ? [a.flags.profile] : Object.keys(cfg.profiles ?? {});
+    const targets = [];
+    for (const n of names) {
+      for (const m of cfg.profiles?.[n]?.candidates ?? []) {
+        if (!targets.includes(m)) targets.push(m);
+      }
+    }
+    if (!targets.length) { p("no candidates configured — run `ocfleet suggest --write`"); return; }
+
+    const timeout = Number(a.flags.timeout ?? 90) * 1000;
+    p(`\n  probing ${targets.length} model(s), ${Math.round(timeout / 1000)}s each\n`);
+    const results = [];
+    for (const model of targets) {
+      const t0 = Date.now();
+      const r = await run(bin, ["run", "--format", "json", "--model", model, "reply with the single word: ok"],
+        { timeout, cwd: repo });
+      const took = Date.now() - t0;
+      const answered = /"type"\s*:\s*"text"/.test(r.stdout || "");
+      const why = answered ? "" : (r.stderr || r.error || "no answer").toString().trim().split("\n").pop().slice(0, 90);
+      H.record(model, answered ? "ok" : "provider-error", why);
+      results.push({ model, answered, took, why });
+      p(`  ${answered ? SYM.ok : SYM.fail} ${model.padEnd(46)} ${String(Math.round(took / 1000) + "s").padStart(5)}  ${why}`);
+    }
+    const good = results.filter((r) => r.answered);
+    p(`\n  ${good.length}/${results.length} answered. Broken ones are skipped by the next delegation.\n`);
+    if (a.flags.json) jsonOut(results);
+  },
+
+  async health(a) {
+    const H = await import("../src/health.mjs");
+    if (a.flags.reset) {
+      const { stateDir } = await import("../src/util.mjs");
+      const f = path.join(stateDir(), "health.json");
+      if (fs.existsSync(f)) fs.unlinkSync(f);
+      p("  health history cleared");
+      return;
+    }
+    const rows = H.summary();
+    if (a.flags.json) return jsonOut(rows);
+    if (!rows.length) { p("\n  nothing recorded yet — run some jobs or `ocfleet probe`\n"); return; }
+    p(`\n  ${"model".padEnd(46)} ${"ok".padStart(4)} ${"fail".padStart(5)}  last trouble`);
+    for (const r of rows) {
+      const when = r.lastFail ? new Date(r.lastFail).toISOString().replace("T", " ").slice(0, 16) : "-";
+      p(`  ${r.coolingDown ? SYM.warn : " "} ${r.model.padEnd(44)} ${String(r.ok).padStart(4)} ${String(r.fail).padStart(5)}  ${when}${r.coolingDown ? "  (skipped for now)" : ""}`);
+      if (r.coolingDown && r.lastError) p(`    ${SYM.dot} ${r.lastError.slice(0, 100)}`);
+    }
+    p("");
+  },
+
+  async dashboard(a) {
+    const { start } = await import("../dashboard/server.mjs");
+    const { report } = await import("../src/reporter.mjs");
+    const crypto = await import("node:crypto");
+
+    const port = Number(a.flags.port ?? 7777);
+    const host = a.flags.host ?? "127.0.0.1";
+    const intervalSec = Number(a.flags.interval ?? 3);
+    // even on loopback: a token stops anything else on this machine from writing
+    const token = crypto.randomUUID();
+
+    let info;
+    try {
+      info = await start({
+        port, host, ingestToken: token,
+        dataDir: path.join((await import("../src/util.mjs")).stateDir(), "dashboard")
+      });
+    } catch (e) {
+      if (e?.code === "EADDRINUSE") {
+        p(`  port ${port} is already in use — pick another with --port`);
+        process.exitCode = 1;
+        return;
+      }
+      throw e;
+    }
+
+    p(`\n  dashboard  ${info.url}`);
+    p(`  data       ${info.stateFile}${info.restoredJobs ? ` (${info.restoredJobs} jobs restored)` : ""}`);
+    p(`  source     this machine, refreshed every ${intervalSec}s`);
+    if (host !== "127.0.0.1" && host !== "localhost") p(`  ${SYM.warn} listening on ${host} — reachable from your network, without a login`);
+    p(`\n  press Ctrl+C to stop\n`);
+
+    if (a.flags.open) openInBrowser(info.url);
+
+    let stopping = false;
+    const tick = async () => {
+      if (stopping) return;
+      try { await report({ to: info.url, token, once: true }); }
+      catch (e) { p(`  ${SYM.warn} refresh failed: ${e.message}`); }
+    };
+    await tick();
+    const timer = setInterval(tick, Math.max(1, intervalSec) * 1000);
+
+    const stop = async () => {
+      if (stopping) return;
+      stopping = true;
+      clearInterval(timer);
+      await info.close();
+      p("\n  dashboard stopped\n");
+      process.exit(0);
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
   },
 
   async mcp() { serve(); },
@@ -281,30 +422,55 @@ const cmds = {
     const ocBin = which("opencode");
     const cfgJson = { mcpServers: { "opencode-fleet": { command: nodeBin, args: [entry, "mcp"] } } };
 
-    if (ocBin) {
+    const gitPath = which("git");
+    if (ocBin || gitPath) {
       const target = path.join(ensureDir(stateDir()), "fleet.config.json");
       const current = readJson(target, {});
-      if (current.opencodeBin !== ocBin) {
-        current.opencodeBin = ocBin;
-        writeJson(target, current);
-        p(`  ✓ pinned opencodeBin → ${ocBin}`);
+      let changed = false;
+      if (ocBin && current.opencodeBin !== ocBin) {
+        current.opencodeBin = ocBin; changed = true;
+        p(`  ${SYM.ok} pinned opencodeBin ${SYM.arrow} ${ocBin}`);
       }
-    } else {
-      p("  ⚠ opencode binary not found — install it (npm i -g opencode-ai) before delegating");
+      // A GUI client may start the server without git on the PATH; pinning the
+      // absolute path is what makes worktrees work there.
+      if (gitPath && current.gitBin !== gitPath) {
+        current.gitBin = gitPath; changed = true;
+        p(`  ${SYM.ok} pinned gitBin ${SYM.arrow} ${gitPath}`);
+      }
+      if (changed) writeJson(target, current);
+    }
+    if (!ocBin) {
+      p(`  ${SYM.warn} opencode binary not found - install it (npm i -g opencode-ai) before delegating`);
     }
 
     if (scope === "print") return jsonOut(cfgJson);
 
     if (which("claude")) {
       const r = runSync("claude", ["mcp", "add", "--scope", scope, "opencode-fleet", "--", nodeBin, entry, "mcp"]);
-      p(r.ok ? `  ✓ registered with Claude Code (scope: ${scope})` : `  ✗ Claude Code registration failed: ${(r.stderr || r.error || "").trim()}`);
+      p(r.ok ? `  ${SYM.ok} registered with Claude Code (scope: ${scope})` : `  ${SYM.fail} Claude Code registration failed: ${(r.stderr || r.error || "").trim()}`);
     } else {
-      p("  · claude CLI not found (npm i -g @anthropic-ai/claude-code to get it)");
+      p(`  ${SYM.dot} claude CLI not found (npm i -g @anthropic-ai/claude-code to get it)`);
+    }
+
+    // `ocfleet` as a global command — nice to have, never required
+    if (which("npm") && !which("ocfleet")) {
+      const link = runSync("npm", ["link"], { cwd: ROOT });
+      if (link.ok && which("ocfleet")) {
+        p(`  ${SYM.ok} \`ocfleet\` is now available everywhere`);
+      } else {
+        p(`  ${SYM.dot} could not register the short command (that is fine)`);
+        p(`    use ${process.platform === "win32" ? ".\\ocfleet <command>" : "./ocfleet <command>"} in this folder, or node ${path.join("bin", "ocfleet.mjs")} <command>`);
+      }
+    } else if (which("ocfleet")) {
+      p(`  ${SYM.ok} \`ocfleet\` command available`);
     }
 
     p("\n  For the Claude desktop app, add this to its MCP config:\n");
     p(JSON.stringify(cfgJson, null, 2).split("\n").map((l) => "    " + l).join("\n"));
-    p(`\n  Skill: cp -r ${path.join(ROOT, "skills", "opencode-fleet")} ~/.claude/skills/\n`);
+    const skillSrc = path.join(ROOT, "skills", "opencode-fleet");
+    p(process.platform === "win32"
+      ? `\n  Skill: Copy-Item -Recurse -Force "${skillSrc}" "$HOME\\.claude\\skills\\"\n`
+      : `\n  Skill: cp -r ${skillSrc} ~/.claude/skills/\n`);
   },
 
   async "init-config"(a) {

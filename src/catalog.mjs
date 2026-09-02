@@ -79,27 +79,70 @@ const ENV_PROVIDERS = {
   CEREBRAS_API_KEY: "cerebras", XAI_API_KEY: "xai"
 };
 
+/** Every place opencode might keep its credentials, across platforms. */
+export function authFileCandidates() {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const out = [];
+  const push = (...parts) => { if (parts[0]) out.push(path.join(...parts)); };
+
+  // XDG layout (Linux, macOS, and opencode on Windows too when it follows XDG)
+  push(process.env.XDG_DATA_HOME || path.join(home, ".local", "share"), "opencode", "auth.json");
+  push(home, ".local", "share", "opencode", "auth.json");
+  push(home, ".config", "opencode", "auth.json");
+  // Windows conventions
+  push(process.env.LOCALAPPDATA, "opencode", "auth.json");
+  push(process.env.APPDATA, "opencode", "auth.json");
+  push(process.env.LOCALAPPDATA, "opencode", "data", "auth.json");
+  // macOS
+  push(home, "Library", "Application Support", "opencode", "auth.json");
+
+  return [...new Set(out)];
+}
+
+/** Config files opencode reads, in the same spirit. */
+function configCandidates(repo) {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const out = [];
+  for (const base of [
+    process.env.XDG_CONFIG_HOME || path.join(home, ".config"),
+    path.join(home, ".config"),
+    process.env.APPDATA ? path.join(process.env.APPDATA) : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA) : null
+  ].filter(Boolean)) {
+    out.push(path.join(base, "opencode", "opencode.json"));
+    out.push(path.join(base, "opencode", "config.json"));
+  }
+  if (repo) out.push(path.join(repo, "opencode.json"));
+  return [...new Set(out)];
+}
+
 /**
  * Provider ids opencode has credentials for. Reads only the KEYS of auth.json —
  * never the secrets — plus providers declared in an opencode config, plus the
- * usual environment variables.
+ * usual environment variables. Every known storage location is checked, because
+ * getting this wrong silently widens the model list instead of failing loudly.
  */
 export function authenticatedProviders({ repo } = {}) {
-  const home = process.env.HOME || "";
   const ids = new Set();
 
-  const auth = readJson(path.join(home, ".local/share/opencode/auth.json"), {});
-  for (const k of Object.keys(auth ?? {})) ids.add(k);
+  for (const f of authFileCandidates()) {
+    const auth = readJson(f, null);
+    if (auth && typeof auth === "object") for (const k of Object.keys(auth)) ids.add(k);
+  }
 
-  for (const f of [
-    path.join(home, ".config/opencode/opencode.json"),
-    path.join(home, ".config/opencode/config.json"),
-    repo ? path.join(repo, "opencode.json") : null
-  ].filter(Boolean)) {
+  for (const f of configCandidates(repo)) {
     const cfg = readJson(f, null);
     for (const k of Object.keys(cfg?.provider ?? {})) ids.add(k);
   }
 
   for (const [env, id] of Object.entries(ENV_PROVIDERS)) if (process.env[env]) ids.add(id);
   return [...ids];
+}
+
+/** Where the credentials were actually found — for doctor, so a wrong guess is visible. */
+export function authSources() {
+  return authFileCandidates().filter((f) => {
+    const j = readJson(f, null);
+    return j && typeof j === "object" && Object.keys(j).length > 0;
+  });
 }

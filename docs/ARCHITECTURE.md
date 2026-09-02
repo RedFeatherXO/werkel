@@ -10,6 +10,9 @@
 | `src/catalog.mjs` | models.dev catalogue (prices/context/tool support for every provider) and which providers hold credentials. |
 | `src/worktree.mjs` | git worktree per job, auto-commit, diff extraction, merge/squash/patch, cleanup. |
 | `src/prompt.mjs` | Turns a delegation into a structured work order for a model that has never seen the repo. |
+| `src/runner.mjs` | One detached node process per attempt: starts the worker, captures its streams, enforces the timeout, records the exit code. |
+| `src/process.mjs` | The two things every OS disagrees about: killing a process tree and asking whether a pid is alive. |
+| `src/health.mjs` | What the fleet learned about model availability from its own runs, so an outage is not rediscovered on every job. |
 | `src/doctor.mjs` | Setup diagnosis: binaries, providers, profiles, budget, stale jobs, optional warmup run. |
 | `src/config.mjs` | Layered config: defaults → global → project → `OPENCODE_FLEET_CONFIG`. |
 | `bin/ocfleet.mjs` | CLI over the same engine, plus `mcp` and `install`. |
@@ -17,7 +20,7 @@
 State lives under `~/.opencode-fleet/` (override with `OPENCODE_FLEET_HOME`):
 
 ```
-jobs/<jobId>/  job.json  prompt.md  events.ndjson  stderr.log  run.sh  exit
+jobs/<jobId>/  job.json  prompt.md  events.ndjson  stderr.log  run.json  exit
 worktrees/     <repo>-<jobId>/            one checkout per job
 spend/         2026-08-31.json            daily cost ledger
 cache/         openrouter.json  opencode-models-<dir>.json
@@ -29,24 +32,51 @@ cache/         openrouter.json  opencode-models-<dir>.json
 fleet_delegate
   ├─ loadConfig(repo)                    global + project layers
   ├─ resolveModel(profile|model)         budget guard decides before anything runs
-  ├─ createWorktree()                    git worktree add -b fleet/<jobId>
-  ├─ buildWorkerPrompt()                 → jobDir/prompt.md
-  └─ launch()                            sh run.sh (detached) → opencode run --format json
+  ├─ headSha(repo)                       pin the base now, even if the job waits
+  └─ slot free?  ─ no →  state: "queued"  (nothing is refused; startQueued() takes it later)
+                 └ yes →  startJob()
+                            ├─ createWorktree()      git worktree add -b fleet/<jobId>
+                            ├─ buildWorkerPrompt()   → jobDir/prompt.md
+                            └─ launch()              node runner.mjs (detached) → opencode run --format json
                                               │
                                               ├─ events.ndjson   (step_start / tool_use / text / step_finish)
-                                              └─ exit            (exit code, written by the wrapper)
+                                              └─ exit            (exit code, written by the runner)
 fleet_wait / fleet_status
-  └─ refresh()  reads exit + events → state, tokens, cost, report → auto-commit on the job branch
+  ├─ refresh()      reads exit + events → state, tokens, cost, report → auto-commit on the job branch
+  └─ startQueued()  a finished job frees a slot → the oldest waiting job starts
 fleet_result / fleet_diff → review → fleet_apply → fleet_cleanup
 ```
 
 ## Design decisions, and the surprises behind them
 
+**Over the limit means queued, never refused.**
+`defaults.maxConcurrentJobs` protects the machine — one opencode process and one full
+worktree per job, plus per-key provider rate limits — not the wallet, which `budget`
+guards separately. The first version returned an error past the limit, which pushed the
+bookkeeping onto the caller: send ten jobs, get six ids and four apologies, and now you
+have to remember which four to resend. Jobs past the limit now get `state: "queued"` and a
+`queuePosition`; `startQueued()` runs after every refresh **and** inside `waitFor()`, so the
+queue moves whether the manager polls or waits. Two details that were not obvious:
+
+- The worktree is created in `startJob()`, not at submission — a hundred queued jobs cost a
+  hundred small JSON files instead of a hundred checkouts. The *base commit* is still pinned
+  at submission (`headSha`), so queueing never silently changes what a job was written against.
+- A `maxConcurrent` passed on one call is stored on the job. The drainer honours it later,
+  otherwise the cap would only hold until the next refresh — which is exactly how the
+  smoke test caught it.
+
 **Jobs run detached, not as child processes of the MCP server.**
-An MCP tool call that blocks for fifteen minutes is a broken tool call. A shell wrapper
-(`run.sh`) owns the process, enforces the timeout with a watchdog, and writes the exit code
-to disk. State is therefore reconstructible: restart Claude mid-job and `fleet_status` still
-reports it correctly.
+An MCP tool call that blocks for fifteen minutes is a broken tool call. A runner process
+(`src/runner.mjs`) owns the worker, enforces the timeout with a watchdog, and writes the exit
+code to disk. State is therefore reconstructible: restart Claude mid-job and `fleet_status`
+still reports it correctly.
+
+This started life as a generated `run.sh`, which was three platform bugs waiting to happen:
+`/bin/sh` does not exist on Windows, the watchdog was a `sleep`-based subshell, and every
+path had to survive POSIX quoting. The runner takes an argv array from a JSON spec, so no
+string is ever parsed as a command — `test/runner.test.mjs` pins that with an argument
+containing spaces, quotes, backslashes, `$` and `;`. Platform-specific behaviour is confined
+to `src/process.mjs`, whose branches are unit-tested from any OS via `killCommandFor()`.
 
 **A wrong model id makes OpenCode hang, not fail.**
 `opencode run --model does/not-exist` produced no output and never exited in testing. That
@@ -70,6 +100,14 @@ would make the daily limit a suggestion. Prices resolve in this order: `staticPr
 override → live OpenRouter API → models.dev (which opencode itself resolves against, so ids
 match and all 200+ providers are covered) → refuse. Local models are priced at zero in
 `staticPricing`.
+
+**Availability is learned, not assumed.**
+A provider failure is recorded against the model that caused it; the next
+delegation puts that model last in its profile for 30 minutes. The candidate is
+never dropped — a single outage should not permanently retire a model — and one
+success clears the record immediately. This came from a real run where a free
+endpoint died mid-job: the failover recovered, but the knowledge died with the
+job, so the next one paid for the same wasted attempt.
 
 **Ranking uses published benchmarks where they exist.**
 `capabilityOf()` reads Artificial Analysis' coding and agentic indices out of the

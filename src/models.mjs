@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { stateDir, ensureDir, readJson, writeJson, run, globMatch, today, resolveBin } from "./util.mjs";
 import { modelsDevCatalog, lookupModelsDev, providerModels, authenticatedProviders } from "./catalog.mjs";
+import { isCoolingDown, load as loadHealth } from "./health.mjs";
 
 const CACHE = () => ensureDir(path.join(stateDir(), "cache"));
 const OR_URL = "https://openrouter.ai/api/v1/models";
@@ -72,7 +73,7 @@ export async function installedModels({ bin, cwd = process.cwd(), refresh = fals
   }
   const r = await run(bin, ["models"], { timeout: 90_000, cwd });
   if (!r.ok && !r.stdout) return readJson(file, []);
-  const list = r.stdout.split("\n").map((s) => s.trim()).filter((s) => s && s.includes("/") && !s.startsWith("#"));
+  const list = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter((s) => s && s.includes("/") && !s.startsWith("#"));
   // `opencode models` can return a short partial list while it is still fetching
   // its catalogue — caching that would silently shrink the fleet for an hour.
   if (list.length >= 5) writeJson(file, list);
@@ -208,12 +209,31 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
   const prof = cfg.profiles?.[name];
   if (!prof) return { error: `unknown profile "${name}". Known: ${Object.keys(cfg.profiles ?? {}).join(", ")}`, rejected };
 
+  // A model that just failed on us is tried last, not first. Free endpoints in
+  // particular drop out for minutes at a time; the fleet should not rediscover
+  // that on every single job.
+  const health = loadHealth();
+  const cooldownMin = cfg.defaults?.modelCooldownMin ?? 30;
+  const ordered = [...(prof.candidates ?? [])].sort((a, b) => {
+    const ca = isCoolingDown(a, { data: health, cooldownMin }) ? 1 : 0;
+    const cb = isCoolingDown(b, { data: health, cooldownMin }) ? 1 : 0;
+    return ca - cb;
+  });
+  const skipped = (prof.candidates ?? []).filter((m) => isCoolingDown(m, { data: health, cooldownMin }));
+
   const affordable = [];
-  for (const cand of prof.candidates ?? []) {
+  for (const cand of ordered) {
     const chk = budgetOk(cand);
     if (!chk) continue;
     affordable.push({ cand, chk });
-    if (await isKnown(cand)) return { model: cand, price: chk.info, why: `profile "${name}"` };
+    if (await isKnown(cand)) {
+      return {
+        model: cand, price: chk.info, why: `profile "${name}"`,
+        deprioritised: skipped.length && skipped[0] === (prof.candidates ?? [])[0] && cand !== (prof.candidates ?? [])[0]
+          ? `${skipped.join(", ")} recently failed and was skipped`
+          : undefined
+      };
+    }
   }
   if (affordable.length) {
     const { cand, chk } = affordable[0];

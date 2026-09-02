@@ -32,6 +32,25 @@ node bin/ocfleet.mjs doctor --warmup
 
 No npm dependencies — plain Node ≥18, git, and the `opencode` CLI.
 
+### Platforms
+
+Linux, macOS and Windows. Jobs are started by a small node runner rather than a
+shell script, so there is one code path everywhere: no `/bin/sh`, no POSIX
+quoting, and paths with spaces are handled by passing an argv array instead of a
+command line. On Windows the runner stops a job's process tree with `taskkill /T`;
+on POSIX it signals the process group.
+
+On Windows, use `scripts\install.ps1` instead of `install.sh`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+One caveat that is not ours: **opencode itself recommends WSL on Windows** for
+full compatibility. The fleet runs natively either way, but if workers behave
+strangely there, try the same setup inside WSL before suspecting the fleet —
+`ocfleet doctor` prints this note on Windows for the same reason.
+
 `--warmup` matters: OpenCode downloads a provider package on its very first real run, which
 otherwise looks like a hang.
 
@@ -48,6 +67,19 @@ The manager skill (`skills/opencode-fleet/SKILL.md`) teaches Claude when to dele
 brief a worker and what to look for in a review. Copy it to `~/.claude/skills/` (the
 installer does this).
 
+## How to call it
+
+Three equivalent ways, pick one:
+
+```bash
+ocfleet doctor              # after ./scripts/install.sh registered the command
+./ocfleet doctor            # launcher in this folder, works immediately
+node bin/ocfleet.mjs doctor # always works, no setup at all
+```
+
+On Windows use `.\ocfleet doctor` or `node bin\ocfleet.mjs doctor`. The examples
+below write `ocfleet` for brevity.
+
 ## Use it
 
 Ask Claude, in plain language:
@@ -58,6 +90,9 @@ Ask Claude, in plain language:
 Claude then drives the tools itself. From a shell the same engine is available:
 
 ```bash
+ocfleet dashboard --open             # every worker as a card, locally, no setup
+ocfleet probe                        # which models actually answer right now
+ocfleet health                       # what the fleet learned about availability
 ocfleet models                       # what you can route to, with prices
 ocfleet suggest --write              # build profiles from your authenticated providers
 ocfleet delegate "Wrap every fetch in src/api/*.ts in withRetry" \
@@ -74,9 +109,9 @@ ocfleet cleanup <jobId>
 
 | Tool | What it does |
 |---|---|
-| `fleet_delegate` | Start a job (returns immediately with a jobId) |
-| `fleet_wait` | Block until jobs finish |
-| `fleet_status` | Running + recent jobs, cost, duration |
+| `fleet_delegate` | Start a job (returns immediately with a jobId; queues it if every slot is busy) |
+| `fleet_wait` | Block until jobs finish — starts waiting jobs as slots free up |
+| `fleet_status` | Running + queued + recent jobs, cost, duration |
 | `fleet_result` | Worker report + changed files + patch |
 | `fleet_diff` | Just the patch |
 | `fleet_logs` | Every tool call the worker made (catches fake "tests pass") |
@@ -131,6 +166,18 @@ ocfleet suggest           # show proposed profiles, ranked by price and coding f
 ocfleet suggest --write   # write them into ~/.opencode-fleet/fleet.config.json (keeps a .bak)
 ```
 
+Free endpoints also collapse under parallel load — a measured run of ten
+simultaneous jobs on a free model produced three HTTP 429s and a vanished
+worker, while the same jobs on `cheap` cost a few cents and completed. Use free
+models for sequential bulk work, not for fan-out.
+
+Free endpoints go down for minutes at a time. The fleet remembers that: a model
+that fails with a provider error is skipped for the next 30 minutes and the job
+moves straight to the profile's next candidate, instead of rediscovering the
+outage every time. `ocfleet health` shows what it learned, `ocfleet probe` tests
+every candidate on purpose before you rely on them, and a success clears a
+model's record immediately.
+
 It only proposes models from providers you hold credentials for (read from opencode's
 auth store and your config — keys are never read, only provider names), so a suggested
 profile cannot point at a provider that would hang on first use.
@@ -141,18 +188,28 @@ affordable candidate runs anyway, with a warning — a stale model list never bl
 
 ## How a job runs
 
-1. `fleet_delegate` resolves a model through the budget guard and creates
-   `fleet/<jobId>` plus a worktree under `~/.opencode-fleet/worktrees/`.
-2. The task becomes a structured work order (`jobDir/prompt.md`): task, manager context,
+1. `fleet_delegate` resolves a model through the budget guard and pins the base commit.
+2. If a worker slot is free the job starts at once: `fleet/<jobId>` plus a worktree under
+   `~/.opencode-fleet/worktrees/`. If all `maxConcurrentJobs` slots are busy the job is
+   **queued**, not refused — it comes back with a `queuePosition` and starts on its own when
+   a slot frees up. Send as many jobs as the work has.
+3. The task becomes a structured work order (`jobDir/prompt.md`): task, manager context,
    files, constraints, verification command, definition of done, and a fixed report format.
-3. OpenCode runs **detached** with `--format json`; a shell wrapper enforces the timeout and
+4. OpenCode runs **detached** with `--format json`; a runner process enforces the timeout and
    records the exit code, so a job survives an MCP restart and can never hang a tool call.
-4. On completion the harness commits the worker's changes on its branch, parses tokens and
-   cost from the event stream, and appends to `~/.opencode-fleet/spend/<date>.json`.
-5. You review, then merge, squash, or export a patch.
+5. On completion the harness commits the worker's changes on its branch, parses tokens and
+   cost from the event stream, and appends to `~/.opencode-fleet/spend/<date>.json` — and
+   hands the freed slot to whichever job has been waiting longest.
+6. You review, then merge, squash, or export a patch.
+
+The concurrency limit is about the machine, not the money: each worker is an opencode
+process plus a full working copy on disk, and providers rate-limit parallel requests from
+one key. The daily spend cap and the price ceilings are separate, and they refuse rather
+than queue. A queued job keeps the base commit it was submitted against, so a long wait
+never silently changes what the worker started from.
 
 Job state lives in `~/.opencode-fleet/jobs/<id>/`: `prompt.md`, `events.ndjson`,
-`stderr.log`, `run.sh`, `job.json`. Nothing is hidden.
+`stderr.log`, `run.json`, `job.json`. Nothing is hidden.
 
 ## Safety notes
 

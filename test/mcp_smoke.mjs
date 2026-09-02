@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = process.argv[2] || "/tmp/demo";
@@ -27,7 +28,7 @@ g("add", "-A"); g("commit", "-qm", "init");
 
 // The suite must never touch the user's fleet config or spend real money:
 // its own state dir, its own profiles, and an explicit mock model everywhere.
-const TEST_HOME = "/tmp/opencode-fleet-teststate";
+const TEST_HOME = path.join(os.tmpdir(), "opencode-fleet-teststate");
 {
   const fsx = await import("node:fs");
   fsx.rmSync(TEST_HOME, { recursive: true, force: true });
@@ -158,7 +159,7 @@ ok("unknown model refused", !!unknown.error, unknown.error?.slice(0, 60));
 // First contact with a provider makes opencode fetch its npm package, which can
 // take minutes. Do that once, slowly, before timing anything else — in a scratch
 // directory and read-only, so the test repo stays pristine for the apply tests.
-const WARM_DIR = "/tmp/opencode-fleet-warmup";
+const WARM_DIR = path.join(os.tmpdir(), "opencode-fleet-warmup");
 {
   const fsx = await import("node:fs");
   fsx.rmSync(WARM_DIR, { recursive: true, force: true });
@@ -267,6 +268,54 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
      `${sug.profiles.cheap.candidates[0]} (${M.capabilityOf(sug.profiles.cheap.candidates[0], M.priceInfo(sug.profiles.cheap.candidates[0], cfg, orLive, md)).source})`);
   ok("suggest: longcontext is cheap and wide", (sug.profiles.longcontext.candidates ?? []).some(r => price(r) < 0.3),
      sug.profiles.longcontext.candidates[0]);
+}
+
+// the concurrency guard must hold even while jobs are failing over
+{
+  const started = [];
+  for (let i = 0; i < 6; i++) {
+    started.push(await call("fleet_delegate", {
+      task: `Concurrency ${i}: edit TARGET=src/c${i}.js with CONTENT=export const c${i} = 1;`,
+      repo: REPO, model: "mock/mock-coder", title: `conc-${i}`, timeoutSec: 120, maxConcurrent: 2
+    }));
+  }
+  ok("every job is accepted, none refused", started.every((r) => r.jobId),
+     started.map((r) => r.state ?? "running").join(","));
+  const queued = started.filter((r) => r.state === "queued");
+  ok("the ones past the limit are queued, not lost", queued.length > 0, `${queued.length} queued`);
+  ok("the queue tells you where you stand", queued.every((r, i) => r.queuePosition === i + 1),
+     queued.map((r) => r.queuePosition).join(","));
+
+  const st = await call("fleet_status", {});
+  ok("never more running than the limit allows", (st.running?.length ?? 0) <= 2,
+     `${st.running?.length ?? 0} running, ${st.queued?.length ?? 0} queued`);
+
+  // the queue must drain by itself, without anyone poking it
+  let allDone = false;
+  for (let i = 0; i < 15 && !allDone; i++) {
+    const w = await call("fleet_wait", { jobIds: started.map((r) => r.jobId), timeoutSec: 40 });
+    allDone = (w.stillRunning?.length ?? 0) === 0;
+  }
+  const final = await call("fleet_status", { limit: 30 });
+  const finished = started.filter((r) => final.recent?.some((x) => x.jobId === r.jobId && x.state === "done"));
+  ok("the queue drains on its own", finished.length === started.length,
+     `${finished.length}/${started.length} finished`);
+
+  for (const j of started) await call("fleet_cleanup", { jobId: j.jobId, force: true });
+}
+
+// a finished job must report a real duration, not zero
+{
+  const d = await call("fleet_delegate", { task: "Duration: edit TARGET=src/d.js with CONTENT=export const d = 1;",
+    repo: REPO, model: "mock/mock-coder", title: "duration", timeoutSec: 90 });
+  let fin = null;
+  for (let i = 0; i < 6 && !fin; i++) {
+    const w = await call("fleet_wait", { jobIds: [d.jobId], timeoutSec: 40 });
+    fin = w.done?.[0] ?? null;
+  }
+  ok("a finished job carries durationMs for the dashboard", typeof fin?.durationMs === "number" && fin.durationMs > 0,
+     `durationMs=${fin?.durationMs} duration=${fin?.duration}`);
+  await call("fleet_cleanup", { jobId: d.jobId, force: true });
 }
 
 // a provider that fails must not end the job: it moves to the next candidate

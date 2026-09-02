@@ -7,7 +7,7 @@
     "worktree": true,
     "autoApprove": true,
     "autoCommit": true,
-    "maxConcurrentJobs": 4
+    "maxConcurrentJobs": 8
   },
 
   "budget": {

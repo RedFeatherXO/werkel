@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9; --panel: #ffffff; --line: #e2e5ea; --ink: #14161a; --muted: #6b7280;
+    --running: #2563eb; --done: #16a34a; --failed: #dc2626; --timeout: #d97706; --cancelled: #6b7280; --queued: #8b5cf6;
+    --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1013; --panel: #161a1f; --line: #262b33; --ink: #e8eaed; --muted: #9aa3af;
+      --running: #60a5fa; --done: #4ade80; --failed: #f87171; --timeout: #fbbf24; --cancelled: #9ca3af; --queued: #a78bfa;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--panel);
+    border-bottom: 1px solid var(--line); padding: 14px 20px;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  }
+  h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  h1 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--done); margin-right: 8px; vertical-align: middle; }
+  h1 .dot.stale { background: var(--cancelled); }
+  .stats { display: flex; gap: 16px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+  .stats b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .filters { margin-left: auto; display: flex; gap: 6px; }
+  .filters button {
+    font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 999px;
+    border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .filters button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+  main { padding: 20px; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px 13px; cursor: pointer; box-shadow: var(--shadow);
+    position: relative; overflow: hidden; text-align: left; font: inherit; color: inherit; width: 100%;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .card:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,.06), 0 10px 24px rgba(0,0,0,.07); }
+  .card:focus-visible { outline: 2px solid var(--running); outline-offset: 2px; }
+  .card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--state); }
+  .card[data-state="running"] { --state: var(--running); }
+  .card[data-state="done"] { --state: var(--done); }
+  .card[data-state="failed"] { --state: var(--failed); }
+  .card[data-state="timeout"] { --state: var(--timeout); }
+  .card[data-state="cancelled"] { --state: var(--cancelled); }
+  .card[data-state="queued"] { --state: var(--queued); }
+
+  .card .top { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .badge {
+    font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase;
+    color: var(--state); display: inline-flex; align-items: center; gap: 5px;
+  }
+  .badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--state); font-style: normal; }
+  .card[data-state="running"] .badge i { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+  .card .when { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .card h2 { font-size: 14.5px; margin: 0 0 8px; font-weight: 600; line-height: 1.35; }
+  .meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); font-size: 12.5px; }
+  .meta span { font-variant-numeric: tabular-nums; }
+  .model { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+  .card .err { margin-top: 8px; color: var(--failed); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .retry { margin-top: 7px; font-size: 12px; color: var(--timeout); }
+
+  .empty { color: var(--muted); text-align: center; padding: 60px 20px; }
+  .empty code { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; font-size: 12.5px; }
+
+  dialog {
+    border: 1px solid var(--line); border-radius: 14px; padding: 0; background: var(--panel); color: var(--ink);
+    width: min(860px, 94vw); max-height: 88vh; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }
+  .sheet { display: flex; flex-direction: column; max-height: 88vh; }
+  .sheet header { position: static; border-radius: 14px 14px 0 0; }
+  .sheet .body { overflow: auto; padding: 18px 20px 22px; }
+  .sheet h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 20px 0 7px; font-weight: 600; }
+  .sheet h3:first-child { margin-top: 0; }
+  pre {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; margin: 0;
+    overflow-x: auto; font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word;
+  }
+  pre.wide { white-space: pre; word-break: normal; }
+  .files { list-style: none; margin: 0; padding: 0; font: 12.5px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .files li::before { content: attr(data-status); display: inline-block; width: 1.4em; color: var(--muted); }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .actions { display: flex; gap: 8px; padding: 13px 20px; border-top: 1px solid var(--line); background: var(--panel); border-radius: 0 0 14px 14px; }
+  .actions button {
+    font: inherit; font-size: 13px; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line);
+    background: transparent; color: var(--ink); cursor: pointer;
+  }
+  .actions button:hover:not(:disabled) { border-color: var(--muted); }
+  .actions button.danger { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 40%, var(--line)); }
+  .actions button:disabled { opacity: .45; cursor: default; }
+  .actions .spacer { margin-left: auto; }
+  .toast { font-size: 12.5px; color: var(--muted); align-self: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot" id="live"></span>Fleet</h1>
+  <div class="stats">
+    <span><b id="s-queued">0</b> wartend</span>
+    <span><b id="s-running">0</b> laufend</span>
+    <span><b id="s-done">0</b> fertig</span>
+    <span><b id="s-failed">0</b> fehlgeschlagen</span>
+    <span><b id="s-cost">$0</b> gesamt</span>
+    <span id="s-hosts"></span>
+  </div>
+  <div class="filters" id="filters">
+    <button data-filter="all" aria-pressed="true">Alle</button>
+    <button data-filter="running" aria-pressed="false">Laufend</button>
+    <button data-filter="queued" aria-pressed="false">Wartend</button>
+    <button data-filter="done" aria-pressed="false">Fertig</button>
+    <button data-filter="problem" aria-pressed="false">Probleme</button>
+  </div>
+</header>
+
+<main><div class="grid" id="grid"></div><div class="empty" id="empty" hidden></div></main>
+
+<dialog id="sheet"><div class="sheet">
+  <header><h1 id="d-title">…</h1><span class="when" id="d-when"></span></header>
+  <div class="body" id="d-body"></div>
+  <div class="actions">
+    <button id="d-cancel" class="danger">Abbrechen</button>
+    <button id="d-cleanup">Worktree aufräumen</button>
+    <span class="toast" id="d-toast"></span>
+    <span class="spacer"></span>
+    <button id="d-close">Schließen</button>
+  </div>
+</div></dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let jobs = [];
+let filter = "all";
+let openKey = null;
+
+const fmtCost = (n) => n == null ? "–" : (n === 0 ? "$0" : n < 0.01 ? "$" + n.toFixed(4) : "$" + n.toFixed(2));
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function dur(job) {
+  // durationMs is authoritative, but derive it when a reporter did not send it
+  const finished = job.durationMs ?? (job.endedMs && job.startedMs ? job.endedMs - job.startedMs : null);
+  const ms = job.state === "running" ? Date.now() - (job.startedMs ?? Date.now()) : (finished ?? 0);
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? s + "s" : Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0") + "s";
+}
+function ago(ms) {
+  if (!ms) return "";
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return "gerade eben";
+  if (s < 3600) return Math.floor(s / 60) + " min";
+  if (s < 86400) return Math.floor(s / 3600) + " h";
+  return Math.floor(s / 86400) + " d";
+}
+const shortModel = (m) => String(m ?? "").split("/").slice(-1)[0];
+
+function matches(job) {
+  if (filter === "all") return true;
+  if (filter === "problem") return ["failed", "timeout", "cancelled"].includes(job.state);
+  return job.state === filter;
+}
+
+/** Running first, then the queue in start order, then history. A waiting job has
+ *  no startedMs, and sorting by that alone would push it below yesterday's work. */
+function byInterest(a, b) {
+  const rank = (j) => (j.state === "running" ? 0 : j.state === "queued" ? 1 : 2);
+  const ra = rank(a), rb = rank(b);
+  if (ra !== rb) return ra - rb;
+  if (ra === 1) return (a.queuedAt ?? 0) - (b.queuedAt ?? 0);
+  return (b.startedMs ?? 0) - (a.startedMs ?? 0);
+}
+
+function render() {
+  const grid = $("grid");
+  const list = jobs.filter(matches).sort(byInterest);
+  grid.innerHTML = list.map((j) => `
+    <button class="card" data-state="${esc(j.state)}" data-key="${esc(j.key)}">
+      <div class="top">
+        <span class="badge"><i></i>${esc(j.state)}</span>
+        <span class="when">${j.state === "running" ? dur(j) : j.state === "queued" ? "wartet" : ago(j.endedMs || j.updatedAt)}</span>
+      </div>
+      <h2>${esc(j.title || j.jobId)}</h2>
+      <div class="meta">
+        <span class="model">${esc(shortModel(j.model))}</span>
+        <span>${dur(j)}</span>
+        <span>${fmtCost(j.costUsd)}</span>
+        ${j.tools ? `<span>${esc(j.tools)}</span>` : ""}
+        ${j.host ? `<span>${esc(j.host)}</span>` : ""}
+      </div>
+      ${j.previousAttempts?.length ? `<div class="retry">↻ Versuch ${esc(j.attempt || "2")} — vorher ${esc(shortModel(j.previousAttempts[0].split(":")[0]))}</div>` : ""}
+      ${j.error ? `<div class="err">${esc(String(j.error).split("\n")[0])}</div>` : ""}
+    </button>`).join("");
+
+  $("empty").hidden = list.length > 0;
+  $("empty").innerHTML = jobs.length
+    ? "Keine Jobs in dieser Ansicht."
+    : `Noch keine Daten. Starte auf dem Rechner mit den Jobs:<br><br><code>ocfleet report --to ${esc(location.origin)}</code>`;
+
+  const by = (s) => jobs.filter((j) => j.state === s).length;
+  $("s-queued").textContent = by("queued");
+  $("s-running").textContent = by("running");
+  $("s-done").textContent = by("done");
+  $("s-failed").textContent = jobs.filter((j) => ["failed", "timeout"].includes(j.state)).length;
+  $("s-cost").textContent = fmtCost(jobs.reduce((a, j) => a + (j.costUsd || 0), 0));
+}
+
+function openSheet(key) {
+  const j = jobs.find((x) => x.key === key);
+  if (!j) return;
+  openKey = key;
+  $("d-title").textContent = j.title || j.jobId;
+  $("d-when").textContent = `${j.state} · ${dur(j)} · ${fmtCost(j.costUsd)}`;
+
+  const rows = [
+    ["Job", j.jobId], ["Modell", j.model], ["Rechner", j.host], ["Repo", j.repo],
+    ["Branch", j.branch], ["Worktree", j.dir], ["Tools", j.tools],
+    ["Tokens", j.tokens ? `${j.tokens.input ?? 0} rein / ${j.tokens.output ?? 0} raus` : null],
+    ["Commit", j.committed]
+  ].filter(([, v]) => v);
+
+  $("d-body").innerHTML = `
+    <dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    ${j.previousAttempts?.length ? `<h3>Frühere Versuche</h3><pre>${esc(j.previousAttempts.join("\n"))}</pre>` : ""}
+    ${j.error ? `<h3>Fehler</h3><pre>${esc(j.error)}</pre>` : ""}
+    ${j.report ? `<h3>Bericht des Workers</h3><pre>${esc(j.report)}</pre>` : ""}
+    ${j.diffstat ? `<h3>Änderungen</h3><pre class="wide">${esc(j.diffstat)}</pre>` : ""}
+    ${j.changedFiles?.length ? `<h3>Dateien</h3><ul class="files">${j.changedFiles.map((f) => `<li data-status="${esc(f.status)}">${esc(f.path)}</li>`).join("")}</ul>` : ""}
+    ${j.task ? `<h3>Auftrag</h3><pre>${esc(j.task)}</pre>` : ""}`;
+
+  $("d-cancel").disabled = j.state !== "running";
+  $("d-cleanup").disabled = j.state === "running" || !j.branch;
+  $("d-toast").textContent = "";
+  if (!$("sheet").open) $("sheet").showModal();
+}
+
+async function command(action) {
+  if (!openKey) return;
+  $("d-toast").textContent = "wird eingereiht…";
+  try {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(openKey)}/${action}`, { method: "POST" });
+    const b = await r.json();
+    $("d-toast").textContent = r.ok
+      ? "eingereiht — wird beim nächsten Push ausgeführt"
+      : (b.error || "fehlgeschlagen");
+  } catch (e) {
+    $("d-toast").textContent = "Dashboard nicht erreichbar";
+  }
+}
+
+async function load() {
+  const r = await fetch("/api/jobs");
+  const b = await r.json();
+  jobs = b.jobs || [];
+  const hosts = Object.entries(b.hosts || {});
+  $("s-hosts").textContent = hosts.length
+    ? hosts.map(([h, v]) => `${h} · ${ago(v.lastSeen)}`).join(" | ")
+    : "kein Reporter verbunden";
+  $("live").classList.toggle("stale", !hosts.some(([, v]) => Date.now() - v.lastSeen < 60000));
+  render();
+  if (openKey && $("sheet").open) openSheet(openKey);
+}
+
+$("grid").addEventListener("click", (e) => {
+  const card = e.target.closest(".card");
+  if (card) openSheet(card.dataset.key);
+});
+$("filters").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  filter = b.dataset.filter;
+  [...$("filters").children].forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  render();
+});
+$("d-close").addEventListener("click", () => $("sheet").close());
+$("sheet").addEventListener("close", () => { openKey = null; });
+$("d-cancel").addEventListener("click", () => command("cancel"));
+$("d-cleanup").addEventListener("click", () => command("cleanup"));
+
+const es = new EventSource("/api/events");
+es.addEventListener("job", load);
+es.addEventListener("tick", load);
+es.addEventListener("command", load);
+es.onerror = () => $("live").classList.add("stale");
+
+load();
+setInterval(render, 1000);   // keep running durations ticking
+setInterval(load, 15000);    // and survive a dropped event stream
+</script>
+</body>
+</html>

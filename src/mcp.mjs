@@ -132,9 +132,16 @@ async function callTool(name, a = {}) {
       }
       const all = await J.refreshAll();
       const spend = spentToday();
+      const queued = all.filter((j) => j.state === "queued")
+        .sort((x, y) => (x.queuedAt ?? 0) - (y.queuedAt ?? 0));
       return {
         running: all.filter((j) => j.state === "running").map((j) => J.jobView(j)),
-        recent: all.filter((j) => j.state !== "running").slice(0, a.limit ?? 15).map((j) => J.jobView(j)),
+        // waiting jobs get their own list — they are neither running nor history,
+        // and showing them under "recent" would read like they had already been tried
+        queued: queued.length
+          ? queued.map((j, i) => ({ ...J.jobView(j), queuePosition: i + 1 }))
+          : undefined,
+        recent: all.filter((j) => j.state !== "running" && j.state !== "queued").slice(0, a.limit ?? 15).map((j) => J.jobView(j)),
         spentTodayUsd: Number((spend.total ?? 0).toFixed(4))
       };
     }

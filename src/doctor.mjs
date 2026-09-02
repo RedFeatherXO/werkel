@@ -17,12 +17,40 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
   if (bin && !cfg.opencodeBin.includes("/")) out.info.opencodeResolved = bin;
   if (!bin) fail(`opencode binary "${cfg.opencodeBin}" not found`, "npm i -g opencode-ai");
   else {
+    // Existing is not the same as runnable: on Windows npm also writes an
+    // extension-less shell shim that node cannot start at all.
     const v = await run(bin, ["--version"], { timeout: 20000 });
-    out.info.opencodeVersion = v.stdout.trim() || "?";
+    const version = (v.stdout || "").trim();
+    out.info.opencodeVersion = version || "NOT RUNNABLE";
+    if (!version) {
+      fail(`found ${bin} but could not run it (${(v.stderr || v.error || "no output").toString().trim().slice(0, 200)})`,
+        process.platform === "win32"
+          ? "that is usually npm's extension-less shim; re-run `node bin\\ocfleet.mjs install` to pin the real .exe"
+          : "check the path in fleet.config.json (opencodeBin)");
+    }
   }
-  out.info.git = which("git") ?? "NOT FOUND";
-  if (!which("git")) fail("git not found", "install git — worktree isolation needs it");
+  const gitPath = (await import("./util.mjs")).gitBin(cfg);
+  const gitOk = gitPath && gitPath !== "git" ? which(gitPath) : which("git");
+  out.info.git = gitOk ?? "NOT FOUND";
+  if (!gitOk) fail("git not found", process.platform === "win32"
+    ? "install Git for Windows (https://git-scm.com/download/win) — worktree isolation needs it"
+    : "install git — worktree isolation needs it");
+  if (gitOk) {
+    const gv = await run(gitOk, ["--version"], { timeout: 15000 });
+    if (!gv.stdout?.trim()) {
+      fail(`found ${gitOk} but could not run it`, "check gitBin in fleet.config.json");
+    }
+  }
   out.info.node = process.version;
+  out.info.platform = `${process.platform}/${process.arch}`;
+  if (Number(process.versions.node.split(".")[0]) < 18) {
+    fail(`node ${process.version} is too old`, "install node 18 or newer");
+  }
+  if (process.platform === "win32") {
+    out.info.windowsNote =
+      "opencode itself recommends WSL on Windows for full compatibility; native runs work but are less tested. " +
+      "If jobs behave oddly, try the same setup inside WSL before debugging the fleet.";
+  }
 
   // 2. config
   out.info.configSources = cfg._sources?.length ? cfg._sources : ["built-in defaults only"];
@@ -36,9 +64,21 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
     out.info.installedModelCount = installed.length;
     if (!installed.length) fail("opencode reports no models", "run: opencode auth login (pick openrouter / zai / deepseek)");
   }
-  const authProviders = (await import("./catalog.mjs")).authenticatedProviders({ repo });
-  out.info.authenticatedProviders = authProviders.length ? authProviders : "none found (run: opencode auth login)";
-  if (!authProviders.length) warn("no provider credentials found — every delegation will fail until you run `opencode auth login`");
+  const cat = await import("./catalog.mjs");
+  const authProviders = cat.authenticatedProviders({ repo });
+  const authFiles = cat.authSources();
+  out.info.authenticatedProviders = authProviders.length ? authProviders : "none detected";
+  if (authFiles.length) out.info.credentialsFrom = authFiles;
+  if (!authProviders.length) {
+    // Not finding the file is not proof that nobody is logged in — the location
+    // differs per platform. Say which is the case instead of crying wolf.
+    if ((out.info.installedModelCount ?? 0) > 20) {
+      warn("could not locate opencode's credential file, so model suggestions are not filtered by provider. " +
+           "opencode itself reports models, so you are probably signed in — check with `opencode auth list`.");
+    } else {
+      warn("no provider credentials found — every delegation will fail until you run `opencode auth login`");
+    }
+  }
 
   let orCatalog = {}, mdCatalog = {};
   try { orCatalog = await openrouterCatalog(); out.info.openrouterCatalogue = Object.keys(orCatalog).length + " models"; }
