@@ -41,7 +41,28 @@
   .filters button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 
   main { padding: 20px; }
+  .groups { display: flex; flex-direction: column; gap: 14px; }
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
+  .group {
+    border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow);
+  }
+  .group summary {
+    list-style: none; display: flex; align-items: center; gap: 10px;
+    padding: 9px 16px; cursor: pointer; user-select: none;
+  }
+  .group summary::-webkit-details-marker { display: none; }
+  .group[open] summary { border-bottom: 1px solid var(--line); }
+  .g-label { font-weight: 650; font-size: 13.5px; }
+  .g-count, .g-cost { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .g-status { color: var(--failed); font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .group .forget {
+    margin-left: auto; font: inherit; font-size: 12.5px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .group .forget:hover, .group .forget.arm {
+    color: var(--failed); border-color: color-mix(in srgb, var(--failed) 40%, var(--line));
+  }
+  .group .grid { padding: 14px; }
 
   .card {
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
@@ -130,7 +151,7 @@
   </div>
 </header>
 
-<main><div class="grid" id="grid"></div><div class="empty" id="empty" hidden></div></main>
+<main><div class="groups" id="grid"></div><div class="empty" id="empty" hidden></div></main>
 
 <dialog id="sheet"><div class="sheet">
   <header><h1 id="d-title">…</h1><span class="when" id="d-when"></span></header>
@@ -149,6 +170,14 @@ const $ = (id) => document.getElementById(id);
 let jobs = [];
 let filter = "all";
 let openKey = null;
+let armedDay = null;
+let armTimer = null;
+const groupStatus = {};
+let collapsedDays = new Set();
+try {
+  const stored = JSON.parse(localStorage.getItem("fleet.collapsedDays"));
+  if (Array.isArray(stored)) collapsedDays = new Set(stored);
+} catch {}
 
 const fmtCost = (n) => n == null ? "–" : (n === 0 ? "$0" : n < 0.01 ? "$" + n.toFixed(4) : "$" + n.toFixed(2));
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -186,10 +215,46 @@ function byInterest(a, b) {
   return (b.startedMs ?? 0) - (a.startedMs ?? 0);
 }
 
-function render() {
-  const grid = $("grid");
-  const list = jobs.filter(matches).sort(byInterest);
-  grid.innerHTML = list.map((j) => `
+function saveCollapsed() {
+  try {
+    localStorage.setItem("fleet.collapsedDays", JSON.stringify([...collapsedDays]));
+  } catch {}
+}
+
+const dayKey = (ms) => {
+  const d = new Date(ms);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+};
+
+function dayLabel(ms) {
+  const d = new Date(ms);
+  const now = new Date();
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  if (day === new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) return "Heute";
+  if (day === new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime()) return "Gestern";
+  return new Date(ms).toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long" });
+}
+
+function buildGroups(list) {
+  const active = [];
+  const days = new Map();
+  for (const j of list) {
+    if (j.state === "running" || j.state === "queued") {
+      active.push(j);
+      continue;
+    }
+    const ms = j.endedMs ?? j.updatedAt ?? 0;
+    const k = dayKey(ms);
+    if (!days.has(k)) days.set(k, { day: k, label: dayLabel(ms), jobs: [] });
+    days.get(k).jobs.push(j);
+  }
+  active.sort(byInterest);
+  const groups = [...days.values()].sort((a, b) => b.day.localeCompare(a.day));
+  for (const g of groups) g.jobs.sort(byInterest);
+  return active.length ? [{ day: null, label: "Jetzt", jobs: active }, ...groups] : groups;
+}
+
+const cardHtml = (j) => `
     <button class="card" data-state="${esc(j.state)}" data-key="${esc(j.key)}">
       <div class="top">
         <span class="badge"><i></i>${esc(j.state)}</span>
@@ -205,7 +270,39 @@ function render() {
       </div>
       ${j.previousAttempts?.length ? `<div class="retry">↻ Versuch ${esc(j.attempt || "2")} — vorher ${esc(shortModel(j.previousAttempts[0].split(":")[0]))}</div>` : ""}
       ${j.error ? `<div class="err">${esc(String(j.error).split("\n")[0])}</div>` : ""}
-    </button>`).join("");
+    </button>`;
+
+function render() {
+  const grid = $("grid");
+  const list = jobs.filter(matches);
+  const groups = buildGroups(list);
+
+  grid.innerHTML = groups.map((g) => {
+    const cost = fmtCost(g.jobs.reduce((a, j) => a + (j.costUsd || 0), 0));
+    const open = g.day === null || !collapsedDays.has(g.day);
+    const armed = g.day !== null && armedDay === g.day;
+    const status = g.day !== null && groupStatus[g.day] ? `<span class="g-status">${esc(groupStatus[g.day])}</span>` : "";
+    const forget = g.day === null ? "" : `<button class="forget${armed ? " arm" : ""}" data-day="${esc(g.day)}">${armed ? "wirklich?" : "löschen"}</button>`;
+    return `
+    <details class="group"${g.day === null ? "" : ` data-day="${esc(g.day)}"`}${open ? " open" : ""}>
+      <summary>
+        <span class="g-label">${esc(g.label)}</span>
+        <span class="g-count">${g.jobs.length}</span>
+        <span class="g-cost">${cost}</span>
+        ${status}
+        ${forget}
+      </summary>
+      <div class="grid">${g.jobs.map(cardHtml).join("")}</div>
+    </details>`;
+  }).join("");
+
+  grid.querySelectorAll("details[data-day]").forEach((d) =>
+    d.addEventListener("toggle", () => {
+      if (d.open) collapsedDays.delete(d.dataset.day);
+      else collapsedDays.add(d.dataset.day);
+      saveCollapsed();
+    })
+  );
 
   $("empty").hidden = list.length > 0;
   $("empty").innerHTML = jobs.length
@@ -263,6 +360,49 @@ async function command(action) {
   }
 }
 
+function forgetClick(day) {
+  if (armedDay === day) {
+    armedDay = null;
+    clearTimeout(armTimer);
+    forgetDay(day);
+  } else {
+    armedDay = day;
+    delete groupStatus[day];
+    clearTimeout(armTimer);
+    armTimer = setTimeout(() => {
+      armedDay = null;
+      render();
+    }, 4000);
+  }
+  render();
+}
+
+async function forgetDay(day) {
+  const g = buildGroups(jobs.filter(matches)).find((x) => x.day === day);
+  const keys = (g ? g.jobs : []).map((j) => j.key);
+  let ok = false;
+  try {
+    const r = await fetch("/api/forget", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys })
+    });
+    ok = r.ok;
+    if (!ok) {
+      const b = await r.json().catch(() => ({}));
+      groupStatus[day] = b.error || "fehlgeschlagen";
+    }
+  } catch (e) {
+    groupStatus[day] = "Dashboard nicht erreichbar";
+  }
+  if (ok) {
+    delete groupStatus[day];
+    load();
+  } else {
+    render();
+  }
+}
+
 async function load() {
   const r = await fetch("/api/jobs");
   const b = await r.json();
@@ -277,6 +417,13 @@ async function load() {
 }
 
 $("grid").addEventListener("click", (e) => {
+  const forget = e.target.closest(".forget");
+  if (forget) {
+    e.preventDefault();
+    e.stopPropagation();
+    forgetClick(forget.dataset.day);
+    return;
+  }
   const card = e.target.closest(".card");
   if (card) openSheet(card.dataset.key);
 });
