@@ -53,8 +53,12 @@ const TEST_ENV = { ...process.env, OPENCODE_FLEET_HOME: TEST_HOME };
 // start the mock model server ourselves so the suite is self-contained
 const MOCK_LOG = path.join(TEST_HOME, "mock.log");
 const mockLogFd = (await import("node:fs")).openSync(MOCK_LOG, "a");
+// Record every request body so the suite can check which tools opencode actually
+// offered the model — that is the only place a denied permission becomes visible.
+const MOCK_REQUESTS = path.join(TEST_HOME, "mock_requests.log");
 const mock = spawn("python3", [path.join(ROOT, "test/mock_llm.py")], {
-  stdio: ["ignore", mockLogFd, mockLogFd], detached: false
+  stdio: ["ignore", mockLogFd, mockLogFd], detached: false,
+  env: { ...process.env, MOCK_LLM_LOG: MOCK_REQUESTS }
 });
 const showMockLog = async (label) => {
   try {
@@ -302,6 +306,59 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
      `${finished.length}/${started.length} finished`);
 
   for (const j of started) await call("fleet_cleanup", { jobId: j.jobId, force: true });
+}
+
+// readOnly must mean read-only. The workers run with --auto, so a permission set
+// to "ask" is auto-approved — the only real restriction is "deny". These two jobs
+// check what opencode ends up offering the model, not what we hoped it would.
+{
+  const fs2 = await import("node:fs");
+  const toolsOfferedSince = (mark) => {
+    let lines = [];
+    try { lines = fs2.readFileSync(MOCK_REQUESTS, "utf8").trim().split("\n").slice(mark); } catch {}
+    const names = new Set();
+    let parsed = 0;
+    for (const l of lines) {
+      let e; try { e = JSON.parse(l); } catch { continue; }
+      parsed++;
+      for (const n of e.tools ?? []) if (n) names.add(n);
+    }
+    // An empty set because nothing was logged would make every "tool X is absent"
+    // assertion pass for the wrong reason. Say so instead.
+    if (!parsed) return null;
+    return names;
+  };
+  const lineCount = () => {
+    try { return fs2.readFileSync(MOCK_REQUESTS, "utf8").trim().split("\n").length; } catch { return 0; }
+  };
+
+  const mark1 = lineCount();
+  const ro = await call("fleet_delegate", {
+    task: "Read src/a.js and describe what it exports. Change nothing.",
+    repo: REPO, model: "mock/mock-coder", title: "ro-nobash",
+    readOnly: true, worktree: false, timeoutSec: 120
+  });
+  await call("fleet_wait", { jobIds: [ro.jobId], timeoutSec: 60 });
+  const t1 = toolsOfferedSince(mark1);
+  ok("readOnly denies bash, not merely asks", t1 && !t1.has("bash"), t1 ? [...t1].join(",") : "NO REQUESTS LOGGED");
+  ok("readOnly denies writing too", t1 && !t1.has("write") && !t1.has("edit"), t1 ? [...t1].join(",") : "NO REQUESTS LOGGED");
+  ok("readOnly says so out loud when there is no worktree",
+     (ro.notices ?? []).some((n) => /no worktree/.test(n)), (ro.notices ?? []).join(" | ") || "(no notices)");
+
+  const mark2 = lineCount();
+  const rb = await call("fleet_delegate", {
+    task: "Read src/a.js and report what it exports.",
+    repo: REPO, model: "mock/mock-coder", title: "ro-bash",
+    readOnly: true, verify: "echo verified", worktree: false, timeoutSec: 120
+  });
+  await call("fleet_wait", { jobIds: [rb.jobId], timeoutSec: 60 });
+  const t2 = toolsOfferedSince(mark2);
+  ok("a verify command brings bash back", !!t2?.has("bash"), t2 ? [...t2].join(",") : "NO REQUESTS LOGGED");
+  ok("but still no way to write a file", t2 && !t2.has("write") && !t2.has("edit"), t2 ? [...t2].join(",") : "NO REQUESTS LOGGED");
+  ok("and the escalation is reported, not silent",
+     (rb.notices ?? []).some((n) => /bash is allowed/.test(n)), (rb.notices ?? []).join(" | ") || "(no notices)");
+
+  for (const j of [ro, rb]) await call("fleet_cleanup", { jobId: j.jobId, force: true });
 }
 
 // a finished job must report a real duration, not zero

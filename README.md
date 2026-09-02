@@ -214,11 +214,22 @@ Job state lives in `~/.opencode-fleet/jobs/<id>/`: `prompt.md`, `events.ndjson`,
 ## Safety notes
 
 Workers run with `--auto` (auto-approved permissions) because the worktree is the sandbox:
-a job can only damage its own branch, and you see the diff before it lands. If you want a
-worker that cannot write at all, pass `readOnly: true` — file edits are denied and it
-reports findings instead. Do not point the fleet at a directory that is not a git repo
-unless you accept edits in place; `fleet_delegate` warns when it has to work without
-isolation.
+a job can only damage its own branch, and you see the diff before it lands.
+
+**`--auto` is also why "ask" is not a restriction.** It answers every permission prompt with
+yes, so a setting of `ask` and a setting of `allow` behave identically. Only `deny` restricts
+anything, and `readOnly: true` denies all four: edit, write, patch — and bash. A read-only
+worker gets `read`, `grep`, `glob` and `webfetch`, and cannot change a byte.
+
+That last one costs you test runs, so there is an opt-out: pass a `verify` command (or
+`allowBash: true`) and the shell comes back, edits stay denied, and the job result says so
+in `notices`. Useful for "investigate this failure and run the suite", but be honest about
+what it is — a shell that can write files even though the file tools cannot.
+
+**No worktree means no sandbox.** `worktree: false` puts the worker in your actual directory
+on your actual branch, with auto-approved permissions and no diff to review. It is the right
+choice for read-only investigation and the wrong one for almost everything else;
+`fleet_delegate` says so in `notices` every time, whether the directory is a git repo or not.
 
 ## Development
 

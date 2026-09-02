@@ -25,6 +25,27 @@ like and how to check it.
 
 If writing the work order takes longer than doing the change, do it yourself.
 
+## What a worker is allowed to do
+
+The default is a git worktree with auto-approved permissions: the worker can do
+anything inside its own branch, and you review the diff before it lands.
+
+`readOnly: true` denies edit, write, patch **and bash**. The worker gets `read`,
+`grep`, `glob` and `webfetch` — enough to investigate a large codebase, not enough
+to change it. Use it whenever you want an answer rather than a change, especially
+on a cheap model you do not fully trust.
+
+Two things to know before you reach for it:
+
+- **A `verify` command re-enables bash**, because you asked for a command to be
+  run. Edits stay denied, and the result says so in `notices`. That combination is
+  right for "find out why this test fails, and run it" — but a shell can write
+  files even when the file tools cannot. Pass `allowBash: false` if you want the
+  investigation without the shell.
+- **`worktree: false` removes the sandbox entirely.** The worker acts on the real
+  directory and the real branch, with nothing to review afterwards. Pair it with
+  `readOnly: true` for investigations; otherwise leave worktrees on.
+
 ## The loop
 
 1. **`fleet_doctor`** once per session (or when a delegation fails). It tells you

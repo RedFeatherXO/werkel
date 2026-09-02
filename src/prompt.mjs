@@ -33,7 +33,12 @@ export function buildWorkerPrompt(job) {
   L.push("- Make the smallest change that fully solves the task. No drive-by refactors, no reformatting untouched code, no new dependencies unless asked.");
   L.push("- Match the existing code style, naming and structure of the files you touch.");
   L.push("- Do not create README/summary/notes files unless the task asks for them. Your report goes in the final message.");
-  if (job.readOnly) L.push("- READ-ONLY JOB: you may not modify files. Investigate and report your findings and a concrete proposal.");
+  if (job.readOnly) {
+    L.push("- READ-ONLY JOB: you may not modify files. Investigate and report your findings and a concrete proposal.");
+    L.push(job.allowBash
+      ? "- You may run shell commands to inspect and test, but nothing that writes, installs, or changes state."
+      : "- Shell commands are disabled too. Use the read, grep and glob tools.");
+  }
 
   if (job.verify) {
     L.push("", "## Verification (run this, report the real output)");

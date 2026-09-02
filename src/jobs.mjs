@@ -167,6 +167,9 @@ export async function delegate(input) {
     verify: input.verify ?? null,
     done: input.done ?? null,
     readOnly: !!input.readOnly,
+    // A verify command is a request to run a command, so asking for one implies
+    // the permission. Anything else has to be asked for on purpose.
+    allowBash: !input.readOnly ? true : (input.allowBash ?? !!input.verify),
     model: picked.model,
     candidates,
     attemptIndex: 0,
@@ -199,6 +202,21 @@ export async function delegate(input) {
   };
   saveJob(job);
 
+  // Say out loud what this job is allowed to do. The isolation story is "the
+  // worktree is the sandbox" — so when there is no worktree, there is no sandbox,
+  // and --auto means nobody is asked before a command runs.
+  const notices = [];
+  if (!useWorktree) {
+    notices.push(root
+      ? `no worktree: the worker works directly in ${dirIn} on the current branch — its changes are not isolated and there is no diff to review`
+      : `no worktree: the worker works directly in ${dirIn}`);
+  }
+  if (job.readOnly && job.allowBash) {
+    notices.push(input.allowBash
+      ? "readOnly + allowBash: file edits are denied, but shell commands run auto-approved — the worker can still change things through bash"
+      : "readOnly with a verify command: file edits are denied, but bash is allowed so the command can run. Pass allowBash:false for a job that may not run commands at all");
+  }
+
   const common = {
     jobId: id,
     model: job.model,
@@ -207,6 +225,7 @@ export async function delegate(input) {
     timeoutSec: job.timeoutSec,
     fallbacks: candidates.length > 1 ? candidates.slice(1) : undefined,
     warning: picked.warning,
+    notices: notices.length ? notices : undefined,
     note2: picked.deprioritised,
     spentTodayUsd: spend.total ?? 0
   };
@@ -218,7 +237,12 @@ export async function delegate(input) {
       state: "queued",
       queuePosition: ahead + 1,
       runningNow: running.length,
-      note: `all ${maxConc} worker slots are busy — this job starts by itself as soon as one frees up; poll with fleet_status / fleet_wait`
+      note: `all ${maxConc} worker slots are busy — this job starts by itself as soon as one frees up; poll with fleet_status / fleet_wait`,
+      // Say where the number comes from. Otherwise the only way to find out why it
+      // is 4 and not 8 is to go looking for a config file you may not know exists.
+      limitFrom: input.maxConcurrent != null
+        ? "maxConcurrent on this call"
+        : `defaults.maxConcurrentJobs in ${cfg._sources?.length ? cfg._sources[cfg._sources.length - 1] : "the built-in defaults"}`
     };
   }
 
@@ -274,7 +298,7 @@ async function startJob(job, cfg) {
   for (const f of job.attach ?? []) args.push("-f", f);
   // no prompt in argv — it arrives on stdin
 
-  const started = launch(job, cfg, args, { readOnly: job.readOnly, stdinFile: promptFile });
+  const started = launch(job, cfg, args, { readOnly: job.readOnly, allowBash: job.allowBash, stdinFile: promptFile });
   if (!started?.pid) {
     job.state = "failed";
     job.error = "could not spawn the worker process";
@@ -323,8 +347,17 @@ export async function startQueued() {
  * handed over as an argv array in a JSON spec — nothing is ever pasted into a
  * shell, so paths with spaces, quotes or backslashes are simply not a problem.
  */
-function launch(job, cfg, args, { readOnly, stdinFile } = {}) {
+export function permissionFor({ readOnly, allowBash }) {
+  if (!readOnly) return null;                       // the worktree is the sandbox
+  // "ask" is not a restriction here: workers run with --auto, which answers every
+  // prompt with yes. A read-only job therefore has to *deny* bash outright, or
+  // `readOnly` would mean "cannot edit files, but may run rm -rf".
+  return { edit: "deny", write: "deny", patch: "deny", bash: allowBash ? "allow" : "deny" };
+}
+
+function launch(job, cfg, args, { readOnly, allowBash, stdinFile } = {}) {
   const dir0 = job.jobDir;
+  const permission = permissionFor({ readOnly, allowBash });
   const spec = {
     bin: resolveBin(cfg),
     args,
@@ -332,9 +365,7 @@ function launch(job, cfg, args, { readOnly, stdinFile } = {}) {
     cwd: job.dir,
     outDir: dir0,
     timeoutSec: Number(job.timeoutSec) || 1200,
-    env: readOnly
-      ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { edit: "deny", write: "deny", bash: "ask", patch: "deny" } }) }
-      : {}
+    env: permission ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission }) } : {}
   };
   const specFile = path.join(dir0, "run.json");
   fs.writeFileSync(specFile, JSON.stringify(spec, null, 2));
@@ -375,7 +406,7 @@ async function relaunch(job, why) {
   if (job.agent) args.push("--agent", job.agent);
   if (job.variant) args.push("--variant", job.variant);
 
-  const started = launch({ ...job, jobDir: dir0 }, cfg, args, { readOnly: job.readOnly, stdinFile: promptFile });
+  const started = launch({ ...job, jobDir: dir0 }, cfg, args, { readOnly: job.readOnly, allowBash: job.allowBash, stdinFile: promptFile });
   if (!started?.pid) return false;
 
   job.jobDir = dir0;
@@ -508,7 +539,14 @@ export function jobView(job, { verbose = false } = {}) {
     model: job.model,
     dir: job.dir,
     branch: job.worktree?.branch ?? null,
-    duration: job.state === "queued" ? "waiting" : humanDuration(job.durationMs ?? (job.state === "running" ? Date.now() - job.startedMs : null)),
+    duration: job.state === "queued"
+      ? `waiting ${humanDuration(Date.now() - (job.queuedAt ?? Date.now()))}`
+      : humanDuration(job.durationMs ?? (job.state === "running" ? Date.now() - job.startedMs : null)),
+    // How long it sat in the queue. Without this a job that waited four minutes and
+    // ran for ten looks identical to one that started instantly — and the difference
+    // is the whole point of knowing the fleet is saturated.
+    waitedMs: job.waitedMs || undefined,
+    waited: job.waitedMs > 1000 ? humanDuration(job.waitedMs) : undefined,
     costUsd: job.costUsd != null ? Number(job.costUsd.toFixed(4)) : null,
     costEstimated: job.costEstimated ?? undefined,
     tools: job.toolSummary ?? undefined,
@@ -593,7 +631,7 @@ export async function followup(id, message, opts = {}) {
   if (job.agent) args.push("--agent", job.agent);
 
   const sub = { ...job, jobDir: dir0, timeoutSec: opts.timeoutSec ?? job.timeoutSec };
-  const started = launch(sub, cfg, args, { readOnly: job.readOnly, stdinFile: promptFile });
+  const started = launch(sub, cfg, args, { readOnly: job.readOnly, allowBash: job.allowBash, stdinFile: promptFile });
 
   job.rounds = round;
   job.state = "running";

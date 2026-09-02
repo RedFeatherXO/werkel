@@ -58,8 +58,18 @@ class H(BaseHTTPRequestHandler):
         except Exception: req = {}
         if LOG:
             try:
+                # The derived fields go first and the raw body last: the body is
+                # truncated to keep the log readable, and `tools` sits behind a
+                # multi-kilobyte system prompt, so logging the body alone would
+                # silently drop exactly the field a permission test needs.
+                entry = {
+                    "path": self.path,
+                    "model": req.get("model"),
+                    "tools": [t.get("function", {}).get("name") for t in (req.get("tools") or [])],
+                    "body": json.dumps(req)[:4000],
+                }
                 with open(LOG, "a") as f:
-                    f.write(json.dumps({"path": self.path, "body": req})[:20000] + "\n")
+                    f.write(json.dumps(entry) + "\n")
             except OSError as e:
                 sys.stderr.write("mock_llm: cannot write MOCK_LLM_LOG (%s)\n" % e)
 

@@ -127,7 +127,16 @@ never secrets.
 **Isolation is what makes `--auto` acceptable.**
 Workers auto-approve their own permissions, which would be reckless in your working tree and
 is unremarkable in a throwaway branch nobody merges unreviewed. `readOnly: true` additionally
-denies edits via `OPENCODE_CONFIG_CONTENT` for investigation-only jobs.
+restricts the job via `OPENCODE_CONFIG_CONTENT`.
+
+The first version of that restriction set `bash: "ask"`, which under `--auto` means "allow" —
+a ten-job test run showed `tools: bash×1` on jobs that had asked for read-only, in the user's
+home directory, with `worktree: false`. `permissionFor()` is now a pure function that never
+emits `ask` at all (`test/permission.test.mjs` pins that), and the smoke test reads the mock
+provider's request log to assert which tools opencode actually offered the model — the only
+place where a denied permission is observable from outside. A `verify` command re-enables
+bash on purpose, and the delegate result reports the escalation in `notices` rather than
+letting it happen quietly.
 
 ## Testing
 

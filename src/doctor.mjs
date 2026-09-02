@@ -55,6 +55,17 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
   // 2. config
   out.info.configSources = cfg._sources?.length ? cfg._sources : ["built-in defaults only"];
   out.info.stateDir = stateDir();
+  // The settings people actually wonder about mid-run. Without this, "why are only
+  // four workers running?" has no visible answer — the number lives in a config file
+  // that overrides the built-in default silently.
+  out.info.defaults = {
+    profile: cfg.defaults.profile,
+    maxConcurrentJobs: cfg.defaults.maxConcurrentJobs,
+    timeoutSec: cfg.defaults.timeoutSec,
+    worktree: cfg.defaults.worktree,
+    failover: cfg.defaults.failover,
+    maxAttempts: cfg.defaults.maxAttempts
+  };
   out.info.budget = cfg.budget;
 
   // 3. models
@@ -117,8 +128,13 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
   // 5. jobs
   const jobs = await refreshAll();
   const running = jobs.filter((j) => j.state === "running");
-  out.info.jobs = { total: jobs.length, running: running.length,
+  const queued = jobs.filter((j) => j.state === "queued");
+  out.info.jobs = { total: jobs.length, running: running.length, queued: queued.length,
     stale: running.filter((j) => Date.now() - j.startedMs > (j.timeoutSec + 120) * 1000).map((j) => j.id) };
+  if (queued.length) {
+    out.info.jobs.note = `${queued.length} waiting for one of ${cfg.defaults.maxConcurrentJobs} worker slots`
+      + (cfg._sources?.length ? ` (defaults.maxConcurrentJobs in ${cfg._sources[cfg._sources.length - 1]})` : "");
+  }
   if (out.info.jobs.stale.length) warn(`stale jobs past their timeout: ${out.info.jobs.stale.join(", ")} — fleet_cancel them`);
 
   // 6. warm up provider packages (first real run downloads npm packages and can look like a hang)

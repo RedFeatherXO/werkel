@@ -71,7 +71,8 @@ ocfleet — delegate coding jobs from Claude to OpenCode workers on cheaper mode
       --context "<text>"  what you already know
       --files a,b,c       files the worker should read first
       --done "<text>"     definition of done
-      --read-only         investigation only, no edits
+      --read-only         investigation only: no edits, and no shell either
+      --allow-bash        with --read-only: let it run commands (implied by --verify)
       --no-worktree       edit the repo directly instead of an isolated branch
       --timeout <sec>     hard kill (default 1200)
       --wait [sec]        block until it finishes, then print the result
@@ -111,13 +112,20 @@ const cmds = {
     p(`  config     ${(r.info.configSources || []).join(", ")}`);
     p(`  state      ${r.info.stateDir}`);
     p(`  models     ${r.info.installedModelCount ?? 0} configured in opencode`);
+    if (r.info.defaults) {
+      const d = r.info.defaults;
+      p(`  defaults   profile ${d.profile}, up to ${d.maxConcurrentJobs} workers at once, ${d.timeoutSec}s timeout, worktree ${d.worktree ? "on" : "off"}, failover ${d.failover ? "on" : "off"}`);
+    }
     p(`  budget     ${SYM.le} $${r.info.budget.maxPromptUsdPerMTok}/Mtok in, ${SYM.le} $${r.info.budget.maxCompletionUsdPerMTok}/Mtok out, ${usd(r.info.spentTodayUsd)} spent today of ${usd(r.info.dailyLimitUsd)}`);
     p("\n  profiles:");
     for (const [name, prof] of Object.entries(r.info.profiles ?? {})) {
       p(`    ${name.padEnd(12)} ${prof.usable ? SYM.arrow + " " + prof.usable : SYM.fail + " nothing usable"}`);
       if (!prof.usable) for (const c of prof.candidates) p(`      ${SYM.dot} ${c.model.padEnd(46)} ${c.reason}`);
     }
-    if (r.info.jobs) p(`\n  jobs       ${r.info.jobs.running} running, ${r.info.jobs.total} total`);
+    if (r.info.jobs) {
+      p(`\n  jobs       ${r.info.jobs.running} running${r.info.jobs.queued ? `, ${r.info.jobs.queued} queued` : ""}, ${r.info.jobs.total} total`);
+      if (r.info.jobs.note) p(`             ${r.info.jobs.note}`);
+    }
     if (r.info.warmup) p(`  warmup     ${JSON.stringify(r.info.warmup)}`);
     for (const w of r.warnings) p(`\n  ${SYM.warn} ${w}`);
     for (const e of r.problems) p(`\n  ${SYM.fail} ${e}`);
@@ -155,6 +163,7 @@ const cmds = {
       files: a.flags.files ? String(a.flags.files).split(",").map((s) => s.trim()) : undefined,
       constraints: a.flags.constraint ? [a.flags.constraint] : undefined,
       readOnly: !!a.flags["read-only"],
+      allowBash: a.flags["allow-bash"] ? true : undefined,
       worktree: a.flags["no-worktree"] ? false : undefined,
       timeoutSec: a.flags.timeout ? Number(a.flags.timeout) : undefined,
       agent: a.flags.agent
@@ -162,8 +171,15 @@ const cmds = {
     if (res.error) { jsonOut(res); process.exitCode = 1; return; }
     p(`\n  job ${res.jobId}`);
     p(`  model    ${res.model}  (${res.why}, ${res.price})`);
-    p(`  worktree ${res.worktree.path ?? "-"}${res.worktree.branch ? "  [" + res.worktree.branch + "]" : ""}`);
-    if (res.worktree.warning) p(`  ${SYM.warn} ${res.worktree.warning}`);
+    // A queued job has no working copy yet — it gets one when it starts.
+    if (res.state === "queued") {
+      p(`  queued   position ${res.queuePosition}, ${res.runningNow} running — starts by itself`);
+      if (res.limitFrom) p(`  limit    ${res.limitFrom}`);
+    } else {
+      p(`  worktree ${res.worktree?.path ?? "-"}${res.worktree?.branch ? "  [" + res.worktree.branch + "]" : ""}`);
+      if (res.worktree?.warning) p(`  ${SYM.warn} ${res.worktree.warning}`);
+    }
+    for (const n of res.notices ?? []) p(`  ${SYM.warn} ${n}`);
     p(`  follow   ocfleet wait ${res.jobId}   |   ocfleet logs ${res.jobId}\n`);
     if (a.flags.wait) {
       const secs = typeof a.flags.wait === "string" ? Number(a.flags.wait) : 900;
