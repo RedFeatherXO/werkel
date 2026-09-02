@@ -19,7 +19,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Configuration is resolved per start(), not at import time, so the same server
 // can be embedded in `ocfleet dashboard` and run standalone in a container.
 let PORT, HOST, DATA_DIR, STATE_FILE, INGEST_TOKEN, USER, PASS, RETENTION;
-let state = { jobs: {}, commands: {}, hosts: {} };
+let state = { jobs: {}, commands: {}, hosts: {}, forgotten: {} };
 
 function configure(opts = {}) {
   PORT = Number(opts.port ?? process.env.PORT ?? 7777);
@@ -39,9 +39,9 @@ function configure(opts = {}) {
 function loadState() {
   try {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { jobs: raw.jobs ?? {}, commands: raw.commands ?? [], hosts: raw.hosts ?? {} };
+    return { jobs: raw.jobs ?? {}, commands: raw.commands ?? [], hosts: raw.hosts ?? {}, forgotten: raw.forgotten ?? {} };
   } catch {
-    return { jobs: {}, commands: [], hosts: {} };
+    return { jobs: {}, commands: [], hosts: {}, forgotten: {} };
   }
 }
 
@@ -65,11 +65,20 @@ function saveSoon() {
   saveTimer = setTimeout(() => { saveTimer = null; saveNow(); }, 1000);
 }
 
+// A tombstone only has to outlive the reporter's push interval: after an hour
+// the source machine has deleted the job and stopped listing it, so the entry
+// can go and the job may return if it is ever pushed again.
+const FORGET_TTL = 3600e3;
+
 function prune() {
   const all = Object.values(state.jobs).sort((a, b) => (b.startedMs ?? 0) - (a.startedMs ?? 0));
   for (const job of all.slice(RETENTION)) delete state.jobs[job.key];
   const cutoff = Date.now() - 24 * 3600e3;
   state.commands = state.commands.filter((c) => !c.doneAt || c.doneAt > cutoff);
+  const stale = Date.now() - FORGET_TTL;
+  for (const [key, at] of Object.entries(state.forgotten)) {
+    if (at < stale) delete state.forgotten[key];
+  }
 }
 
 // ---- live updates --------------------------------------------------------
@@ -149,6 +158,10 @@ async function handle(req, res) {
     for (const j of Array.isArray(body.jobs) ? body.jobs : []) {
       if (!j?.jobId) continue;
       const key = `${host}:${j.jobId}`;
+      // The reporter keeps pushing its full job list, so a live tombstone is the
+      // only thing keeping a forgotten job out — but an expired one must not
+      // swallow another push before prune() gets around to dropping it.
+      if (state.forgotten[key] > Date.now() - FORGET_TTL) continue;
       const prev = state.jobs[key];
       state.jobs[key] = { ...j, key, host, updatedAt: Date.now() };
       seen.push(key);
@@ -194,6 +207,34 @@ function byInterest(a, b) {
   return (b.startedMs ?? 0) - (a.startedMs ?? 0);
 }
 
+  if (req.method === "POST" && p === "/api/forget") {
+    let body;
+    try { body = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    if (!Array.isArray(body.keys)) return json(res, 400, { error: "body must contain a keys array" });
+    const commands = [];
+    const forgotten = [];
+    // The cap keeps one oversized request from queueing an unbounded pile of
+    // commands; unknown keys are skipped so the caller need not double-check.
+    for (const raw of body.keys.slice(0, 500)) {
+      const key = String(raw ?? "");
+      const job = state.jobs[key];
+      if (!job) continue;
+      delete state.jobs[key];
+      state.forgotten[key] = Date.now();
+      const cmd = {
+        id: crypto.randomUUID(), action: "forget", jobId: job.jobId, host: job.host,
+        createdAt: Date.now(), sentAt: null, doneAt: null, ok: null, error: null
+      };
+      state.commands.push(cmd);
+      commands.push(cmd);
+      forgotten.push(key);
+    }
+    // One event for the whole batch so open browsers drop every card in one go.
+    broadcast("forget", { keys: forgotten });
+    saveSoon();
+    return json(res, 200, { ok: true, forgotten: forgotten.length, commands });
+  }
+
   if (req.method === "GET" && p === "/api/jobs") {
     const jobs = Object.values(state.jobs).sort(byInterest);
     return json(res, 200, { jobs, hosts: state.hosts, commands: state.commands.slice(-50) });
@@ -210,12 +251,20 @@ function byInterest(a, b) {
     const key = decodeURIComponent(rawKey);
     const job = state.jobs[key];
     if (!job) return json(res, 404, { error: "unknown job" });
-    if (!["cancel", "cleanup"].includes(action)) return json(res, 400, { error: "action must be cancel or cleanup" });
+    if (!["cancel", "cleanup", "forget"].includes(action)) return json(res, 400, { error: "action must be cancel, cleanup or forget" });
     const cmd = {
       id: crypto.randomUUID(), action, jobId: job.jobId, host: job.host,
       createdAt: Date.now(), sentAt: null, doneAt: null, ok: null, error: null
     };
     state.commands.push(cmd);
+    // Deleting the job alone would not survive the next push — the tombstone is
+    // what makes the forget stick, and the event drops the card in browsers
+    // that already have the dashboard open.
+    if (action === "forget") {
+      delete state.jobs[key];
+      state.forgotten[key] = Date.now();
+      broadcast("forget", { keys: [key] });
+    }
     saveSoon();
     broadcast("command", cmd);
     return json(res, 202, { ok: true, command: cmd, note: "queued — the reporter picks it up on its next push" });

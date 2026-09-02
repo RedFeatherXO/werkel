@@ -92,7 +92,48 @@ try {
   }
   const restored = await (await fetch(BASE + "/api/jobs")).json();
   ok("survives a restart", restored.jobs.length === 3, `${restored.jobs.length} jobs restored`);
+
+  // --- forget: deleting a job must survive the reporter's full-list pushes
+  const fkey = "meik-desktop:20260831-2";
+  ok("queues a forget from the browser",
+     (await fetch(`${BASE}/api/jobs/${encodeURIComponent(fkey)}/forget`, { method: "POST" })).status === 202);
+  const fList = await (await fetch(BASE + "/api/jobs")).json();
+  ok("forgetting a job removes it from the list", !fList.jobs.some((j) => j.key === fkey), `${fList.jobs.length} jobs left`);
+
+  const fPush = await (await post("/api/ingest", snapshot)).json();
+  ok("hands the forget command to the next push", fPush.commands.length === 1 && fPush.commands[0].action === "forget",
+     JSON.stringify(fPush.commands));
+  ok("does not hand out the forget command twice", (await (await post("/api/ingest", snapshot)).json()).commands.length === 0);
+  const fAfter = await (await fetch(BASE + "/api/jobs")).json();
+  ok("a later push does not resurrect the forgotten job", !fAfter.jobs.some((j) => j.key === fkey), `${fAfter.jobs.length} jobs left`);
+
+  const bResp = await post("/api/forget", { keys: ["meik-desktop:20260831-1", "meik-desktop:20260831-3", "meik-desktop:never-seen"] });
+  const bBody = await bResp.json();
+  ok("bulk forget forgets every known key and counts them",
+     bResp.status === 200 && bBody.ok === true && bBody.forgotten === 2 && bBody.commands.length === 2, JSON.stringify(bBody));
+  const bList = await (await fetch(BASE + "/api/jobs")).json();
+  ok("bulk forget empties the list", bList.jobs.length === 0, `${bList.jobs.length} jobs left`);
+  ok("rejects a bulk forget without a keys array", (await post("/api/forget", {})).status === 400);
+
+  // a tombstone older than an hour must no longer block re-ingest: age the
+  // saved tombstones past their TTL by rewriting the state file
   srv2.kill("SIGTERM");
+  await new Promise((r) => setTimeout(r, 600));
+  const st = JSON.parse(fs.readFileSync(path.join(DATA, "state.json"), "utf8"));
+  const hourAgo = Date.now() - 2 * 60 * 60e3;
+  for (const k of Object.keys(st.forgotten ?? {})) st.forgotten[k] = hourAgo;
+  fs.writeFileSync(path.join(DATA, "state.json"), JSON.stringify(st));
+  const srv3 = spawn(process.execPath, [path.join(HERE, "server.mjs")], {
+    env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, FLEET_INGEST_TOKEN: TOKEN, HOST: "127.0.0.1" }, stdio: "ignore"
+  });
+  for (let i = 0; i < 50; i++) {
+    try { if ((await fetch(BASE + "/healthz")).ok) break; } catch {}
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await post("/api/ingest", snapshot);
+  const revived = await (await fetch(BASE + "/api/jobs")).json();
+  ok("a tombstone older than an hour no longer blocks re-ingest", revived.jobs.length === 3, `${revived.jobs.length} jobs`);
+  srv3.kill("SIGTERM");
 } finally {
   srv.kill("SIGTERM");
 }
