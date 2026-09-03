@@ -35,13 +35,13 @@ werkel doctor --warmup
 **Linux / macOS**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OWNER/werkel/main/scripts/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/RedFeatherXO/werkel/main/scripts/bootstrap.sh | bash
 ```
 
 **Windows** (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/OWNER/werkel/main/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/RedFeatherXO/werkel/main/scripts/bootstrap.ps1 | iex
 ```
 
 Both clone into `~/werkel` (override with `WERKEL_DIR`), check node and
@@ -53,7 +53,7 @@ read, which is a reasonable thing to object to. The two-step version does exactl
 the same work and lets you look first:
 
 ```bash
-git clone https://github.com/OWNER/werkel && cd werkel
+git clone https://github.com/RedFeatherXO/werkel && cd werkel
 bash scripts/install.sh          # or: powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 

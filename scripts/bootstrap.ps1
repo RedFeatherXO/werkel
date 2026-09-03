@@ -1,13 +1,13 @@
 # One-line install for Windows:
-#   irm https://raw.githubusercontent.com/OWNER/werkel/main/scripts/bootstrap.ps1 | iex
+#   irm https://raw.githubusercontent.com/RedFeatherXO/werkel/main/scripts/bootstrap.ps1 | iex
 #
 # That runs code you have not read. The two-step version is identical and lets
 # you look first:
-#   git clone https://github.com/OWNER/werkel; cd werkel
+#   git clone https://github.com/RedFeatherXO/werkel; cd werkel
 #   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 $ErrorActionPreference = "Stop"
 
-$repo = if ($env:OCFLEET_REPO) { $env:OCFLEET_REPO } else { "https://github.com/OWNER/werkel" }
+$repo = if ($env:OCFLEET_REPO) { $env:OCFLEET_REPO } else { "https://github.com/RedFeatherXO/werkel" }
 $dir  = if ($env:OCFLEET_DIR)  { $env:OCFLEET_DIR }  else { Join-Path $HOME "werkel" }
 function Say($m) { Write-Host "  $m" }
 

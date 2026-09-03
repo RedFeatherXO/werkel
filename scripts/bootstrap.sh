@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # One-line install for Linux and macOS:
-#   curl -fsSL https://raw.githubusercontent.com/OWNER/werkel/main/scripts/bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/RedFeatherXO/werkel/main/scripts/bootstrap.sh | bash
 #
 # Piping a remote script into a shell means running code you have not read. If
 # that bothers you — it reasonably might — the two-step version does the same
 # thing and lets you look first:
-#   git clone https://github.com/OWNER/werkel && cd werkel && bash scripts/install.sh
+#   git clone https://github.com/RedFeatherXO/werkel && cd werkel && bash scripts/install.sh
 set -euo pipefail
 
-REPO="${OCFLEET_REPO:-https://github.com/OWNER/werkel}"
+REPO="${OCFLEET_REPO:-https://github.com/RedFeatherXO/werkel}"
 DIR="${OCFLEET_DIR:-$HOME/werkel}"
 say() { printf "  %s\n" "$*"; }
 
