@@ -25,12 +25,26 @@ daily spend limit.
 
 ```bash
 git clone <your-fork> opencode-fleet && cd opencode-fleet
-./scripts/install.sh          # checks node/git/opencode, registers the MCP server, installs the skill
+bash scripts/install.sh       # checks node/git/opencode, registers the MCP server, installs the skill
 opencode auth login           # openrouter (recommended), zai, deepseek, …
-node bin/ocfleet.mjs doctor --warmup
+ocfleet doctor --warmup
 ```
 
 No npm dependencies — plain Node ≥18, git, and the `opencode` CLI.
+
+### If `ocfleet` is not found
+
+`install.sh` symlinks it into `~/.local/bin`. If that directory is new, your shell
+does not know about it yet — open a new one, or run the linker on its own:
+
+```bash
+node bin/ocfleet.mjs link                 # also repairs the executable bits
+node bin/ocfleet.mjs link --dir ~/bin     # somewhere else on your PATH
+```
+
+`./ocfleet` from the repo folder always works and needs no setup at all. Copying
+this repo through a zip, an editor or a file-sync bridge tends to drop the
+executable bit; `link` puts it back, which is why it is safe to re-run.
 
 ### Platforms
 

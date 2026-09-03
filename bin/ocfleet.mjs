@@ -5,6 +5,7 @@
  */
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { loadConfig, DEFAULTS } from "../src/config.mjs";
 import { allowedModels, spentToday, suggestProfiles } from "../src/models.mjs";
@@ -99,6 +100,7 @@ ocfleet — delegate coding jobs from Claude to OpenCode workers on cheaper mode
       --interval <sec>    how often to refresh, default 3
   ocfleet mcp                            run as an MCP stdio server (for Claude)
   ocfleet install [--scope user|project|print]   register the MCP server with Claude Code
+  ocfleet link [--dir <path>]            put ocfleet on your PATH (default ~/.local/bin)
   ocfleet init-config [--force]          write a starter fleet.config.json
 `;
 
@@ -434,6 +436,53 @@ const cmds = {
   },
 
   async mcp() { serve(); },
+
+  /**
+   * Put `ocfleet` on the PATH. The docs promised this command for a long time
+   * while nothing ever created it, so every example had to be run as
+   * `node bin/ocfleet.mjs ...` instead. It also repairs the executable bits,
+   * because copying this repo around (through a file-transfer bridge, a zip on
+   * Windows, an editor) drops them silently and then the launcher stops working.
+   */
+  async link(a) {
+    const { chmodSync, existsSync, mkdirSync, symlinkSync, unlinkSync, lstatSync } = fs;
+    const launcher = path.join(ROOT, process.platform === "win32" ? "ocfleet.cmd" : "ocfleet");
+
+    for (const f of [path.join(ROOT, "ocfleet"), path.join(ROOT, "bin", "ocfleet.mjs"), path.join(ROOT, "scripts", "install.sh")]) {
+      try { if (existsSync(f)) chmodSync(f, 0o755); } catch {}
+    }
+    if (process.platform !== "win32") p(`  ${SYM.ok} made ${path.relative(ROOT, launcher)} and bin/ocfleet.mjs executable`);
+
+    if (process.platform === "win32") {
+      p(`\n  On Windows there is no symlink to make. Either add this folder to your PATH:`);
+      p(`      $env:Path += ";${ROOT}"          # this session`);
+      p(`      [Environment]::SetEnvironmentVariable("Path", $env:Path + ";${ROOT}", "User")`);
+      p(`  or just call .\\ocfleet from here.\n`);
+      return;
+    }
+
+    const dir = a.flags.dir ?? path.join(os.homedir(), ".local", "bin");
+    const dest = path.join(dir, "ocfleet");
+    try {
+      mkdirSync(dir, { recursive: true });
+      try { if (lstatSync(dest)) unlinkSync(dest); } catch {}
+      symlinkSync(launcher, dest);
+    } catch (e) {
+      p(`\n  ${SYM.warn} could not link into ${dir}: ${e.message}`);
+      p(`  run it from here instead: ${ROOT}/ocfleet\n`);
+      return;
+    }
+    p(`  ${SYM.ok} linked ${dest} -> ${launcher}`);
+
+    // A link nobody can reach is not an install. Say so instead of claiming success.
+    const onPath = (process.env.PATH ?? "").split(":").includes(dir);
+    if (onPath) {
+      p(`\n  ready: ocfleet doctor\n`);
+    } else {
+      p(`\n  ${SYM.warn} ${dir} is not on your PATH. Add it, then open a new shell:`);
+      p(`      echo 'export PATH="${dir}:$PATH"' >> ~/.bashrc\n`);
+    }
+  },
 
   async install(a) {
     const entry = path.join(ROOT, "bin", "ocfleet.mjs");

@@ -35,6 +35,9 @@ fi
 # desktop-app JSON block
 node "$ROOT/bin/ocfleet.mjs" install --scope user
 
+# put `ocfleet` on the PATH — the docs referred to it long before anything created it
+node "$ROOT/bin/ocfleet.mjs" link
+
 SKILLS_DIR="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DIR"
 cp -r "$ROOT/skills/opencode-fleet" "$SKILLS_DIR/" 2>/dev/null \
@@ -44,7 +47,8 @@ cp -r "$ROOT/skills/opencode-fleet" "$SKILLS_DIR/" 2>/dev/null \
 echo
 say "next:"
 say "  1. opencode auth login                              # openrouter / zai / deepseek / opencode zen"
-say "  2. node $ROOT/bin/ocfleet.mjs suggest --write       # profiles from the providers you have"
-say "  3. node $ROOT/bin/ocfleet.mjs doctor                # verify"
+say "  2. ocfleet suggest --write                          # profiles from the providers you have"
+say "  3. ocfleet doctor                                   # verify"
+say "     (if 'ocfleet' is not found, open a new shell or use $ROOT/ocfleet)"
 say "  4. ask Claude: \"delegate the failing parser tests to a cheap worker\""
 echo
