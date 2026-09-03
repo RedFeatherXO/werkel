@@ -54,9 +54,17 @@ Two things to know before you reach for it:
    separate git worktrees, so file-level independence is what keeps merges clean.
 3. **`fleet_delegate`** each job. Start them all before waiting on any — that is
    where the wall-clock win comes from.
-4. **`fleet_wait`** on the batch. Poll in short calls (45s or less) rather than one long wait — a bridge between you and the fleet may cap how long a single call can block.
-5. **`fleet_result`** per job, then **read the patch**. The report is a claim; the
-   diff is the evidence.
+4. **`fleet_wait`** on the batch. Poll in short calls (45s or less) rather than one
+   long wait — a bridge between you and the fleet may cap how long a single call can
+   block (a desktop bridge typically cuts off at 60s, so waiting longer is not an
+   option, only waiting more often). A reply of `{unchanged: true, stillRunning: [...]}`
+   means literally nothing has happened since your last call: do not reason about it,
+   do not report it to the user, just call again. A job that finished brings its
+   report with it, so you usually skip straight to step 5's second half.
+5. **`fleet_result`** per job. It carries the report, the changed files and the
+   diffstat — but **not** the patch, which runs to thousands of tokens. Call
+   **`fleet_diff`** when the report gives you a reason to look. The report is a
+   claim; the diff is the evidence, and most claims are worth checking.
 6. **`fleet_followup`** with specific feedback (same session, same worktree, keeps
    context, cheap) — or fix trivia yourself instead of paying for another round.
 7. **`fleet_apply`** to land it, **`fleet_cleanup`** to drop the worktree.
@@ -90,6 +98,15 @@ bug fixes, `strong` when the logic is tricky or the first attempt failed,
 `longcontext` when the job must read a lot at once, `local` for offline models.
 Escalate on failure rather than starting expensive.
 
+Profiles keep themselves current: a candidate list older than
+`defaults.profileMaxAgeDays` (7) is re-ranked against the live catalogue on the
+next delegation, and the result says so in `notices`. Only lists the fleet wrote
+itself are refreshed — a hand-written config is never replaced — and nothing the
+budget guard would refuse can ever be proposed, so the worst case is a different
+model under the same ceiling. Within a profile the better model goes first,
+scored against today's catalogue rather than the order the list happens to be in;
+`fleet_delegate` reports that as `reordered` when it changed the outcome.
+
 If a profile reports nothing usable, call `fleet_models` with `suggest: true` — it
 proposes candidate lists built from the providers this machine is authenticated for,
 which the user can apply with `ocfleet suggest --write` (or `node bin/ocfleet.mjs
@@ -98,7 +115,8 @@ time, so mention both when you tell someone to run it).
 
 ## Reviewing
 
-Read the patch, not the summary. Watch for the classic worker failure modes:
+Read the patch (`fleet_diff`), not the summary. Watch for the classic worker
+failure modes:
 
 - **Scope creep** — reformatting, renaming, "while I was here" edits. Reject.
 - **Fake verification** — VERIFICATION says "tests pass" but `fleet_logs` shows no

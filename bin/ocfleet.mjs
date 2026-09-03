@@ -211,6 +211,9 @@ const cmds = {
     const current = readJson(target, {});
     if (fs.existsSync(target)) fs.copyFileSync(target, target + ".bak");
     current.profiles = r.profiles;
+    // The stamp is what lets the fleet refresh this list later: without it, an
+    // auto-refresh would not know whether these profiles are its own to replace.
+    current.profilesWrittenAt = new Date().toISOString();
     writeJson(target, current);
     p(`\n  ${SYM.ok} wrote ${Object.keys(r.profiles).length} profiles to ${target}${fs.existsSync(target + ".bak") ? " (backup: fleet.config.json.bak)" : ""}\n`);
   },

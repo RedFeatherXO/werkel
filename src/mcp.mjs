@@ -52,7 +52,7 @@ const TOOLS = [
   },
   {
     name: "fleet_wait",
-    description: "Block until the given jobs finish (or the wait times out). Use this instead of polling in a loop. Returns finished jobs with their report, cost and tool usage. Keep timeoutSec at or below 45 when this server is reached through a bridge or proxy that caps call duration; call it repeatedly instead of waiting long once.",
+    description: "Block until the given jobs finish (or the wait times out), then report what changed. A finished job comes back with its report already attached, so you rarely need fleet_result to find out how it went. A reply of {unchanged:true, stillRunning:[...]} means nothing at all has happened since your last wait — there is nothing to think about, just call again. Keep timeoutSec at or below 45 when this server is reached through a bridge or proxy that caps call duration (a desktop bridge typically cuts off at 60s); call it repeatedly rather than waiting long once.",
     inputSchema: { type: "object", properties: {
       jobIds: { type: "array", items: { type: "string" }, description: "Jobs to wait for. Omit = all running jobs." },
       timeoutSec: { type: "number", description: "How long to wait, default 120. The job itself keeps running if the wait expires." } } }
@@ -64,8 +64,8 @@ const TOOLS = [
   },
   {
     name: "fleet_result",
-    description: "Full result of a finished job: the worker's report (SUMMARY/FILES/VERIFICATION/ASSUMPTIONS/BLOCKED), changed files, diffstat and cost. Read this before reviewing the diff.",
-    inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, includeDiff: { type: "boolean", description: "Also include the patch (default true)" }, maxDiffChars: { type: "number" } } }
+    description: "Result of a finished job: the worker's report (SUMMARY/FILES/VERIFICATION/ASSUMPTIONS/BLOCKED), changed files, diffstat and cost. The patch is NOT included unless you ask for it — read this first, then fleet_diff when the report gives you a reason to.",
+    inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, includeDiff: { type: "boolean", description: "Also include the full patch (default false — it is large; use fleet_diff instead once you know you want it)" }, maxDiffChars: { type: "number" } } }
   },
   {
     name: "fleet_diff",
@@ -157,7 +157,11 @@ async function callTool(name, a = {}) {
         out.changedFiles = d.files;
         out.diffstat = d.stat;
         out.uncommitted = d.uncommitted?.length ? d.uncommitted : undefined;
-        if (a.includeDiff !== false) out.patch = d.patch;
+        // The patch runs to thousands of tokens. The report, the diffstat and the
+        // file list are enough to decide whether it is worth fetching, so it is
+        // opt-in here and fleet_diff exists for when the answer is yes.
+        if (a.includeDiff === true) out.patch = d.patch;
+        else if (d.patchBytes) out.patchAvailable = `${d.patchBytes} bytes — fleet_diff ${job.id}`;
       }
       return out;
     }
@@ -174,9 +178,15 @@ async function callTool(name, a = {}) {
       const ev = J.parseEvents(a.jobId, job.jobDir);
       let stderr = "";
       try { stderr = fs.readFileSync(path.join(job.jobDir, "stderr.log"), "utf8"); } catch {}
+      // Every tool call names its file by absolute path, so the same seventy
+      // characters of worktree prefix are repeated on every line of the log.
+      const root = job.dir ?? "";
+      const rel = (t) => (root && typeof t === "string" && t.startsWith(root))
+        ? (t.slice(root.length).replace(/^[\\/]+/, "") || ".")
+        : t;
       return {
-        jobId: job.id, state: job.state, events: ev.eventCount,
-        toolCalls: ev.tools.slice(-(a.tail ?? 40)),
+        jobId: job.id, state: job.state, events: ev.eventCount, workingDir: root || undefined,
+        toolCalls: ev.tools.slice(-(a.tail ?? 40)).map((t) => ({ ...t, target: rel(t.target) })),
         summary: J.toolSummary(ev.tools),
         errors: ev.errors,
         stderrTail: truncate(stderr.split("\n").slice(-30).join("\n"), 3000),

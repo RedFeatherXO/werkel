@@ -49,6 +49,49 @@ fleet_result / fleet_diff → review → fleet_apply → fleet_cleanup
 
 ## Design decisions, and the surprises behind them
 
+**A model ranking that runs once is not a ranking, it is a snapshot.**
+The scoring existed only inside `ocfleet suggest`, a command run by hand — so a
+candidate list written in August stayed in force indefinitely while new models
+appeared weekly. Nothing broke, which is why nobody would notice: the jobs kept
+running, just not on the best thing available. Profiles older than
+`defaults.profileMaxAgeDays` are now re-ranked on the next delegation.
+
+Two guards make that safe to do unattended. `suggestProfiles` now applies
+`budgetCheck` to everything it proposes, so an auto-refresh can only ever produce
+models the guard already allows — never a premium one, never a denylisted one.
+(It did not before, which is how a denylisted `gpt-5` ended up sitting in a
+suggested `balanced` profile, refused on every single job.) And a config without a
+`profilesWrittenAt` stamp is never touched: no stamp means the fleet did not write
+those profiles, and replacing someone's hand-curated list on their next delegation
+would be losing their work, not refreshing it. `suggest --write` stamps the file,
+which is what opts a user in.
+
+Ordering within a profile moved to resolve time for the same reason: the stored
+order records what was best when the list was written. `resolveModel` sorts by
+today's score (recent failures still go last) and hands that order to the failover
+chain, so a retry cannot ignore the ranking the first attempt applied.
+
+**Polling is the manager's real cost, so a poll that has nothing to say says nothing.**
+A blocking `fleet_wait` survives about fifty seconds before a desktop bridge cuts the
+call (measured: 240s fails with "device did not respond within 60s", 52s returns
+fine). Waiting longer is therefore impossible and backing off is pointless — there is
+no idle time between calls, each already blocks to the ceiling. The number of round
+trips is fixed at wall-clock ÷ 50s, so the only lever is what each one returns.
+
+A seventeen-minute batch of three jobs was polled eighteen times, and each reply
+carried a full `jobView` per job — id, title, model, worktree path, branch, duration
+in two formats, queue wait, null cost — about 280 tokens to say "still running".
+`stillRunning` is now one line per job, and when nothing has changed state at all
+since the caller's last wait the reply is `{unchanged: true, stillRunning: [...]}`
+and nothing else: 4x smaller, and the flag lets the manager skip thinking about it
+entirely. `jobPulse()` decides what counts as a change — state, attempt index and
+model — so a silent poll can never hide a finished job or a failover.
+
+Three smaller leaks went with it: `fleet_result` echoed the manager's own thousand-word
+work order back at them, shipped the full patch by default (now `fleet_diff`'s job,
+with the diffstat left behind to decide by), and `fleet_logs` repeated the absolute
+worktree path on every one of its forty tool calls.
+
 **Over the limit means queued, never refused.**
 `defaults.maxConcurrentJobs` protects the machine — one opencode process and one full
 worktree per job, plus per-key provider rate limits — not the wallet, which `budget`

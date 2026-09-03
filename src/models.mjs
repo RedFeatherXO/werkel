@@ -122,7 +122,12 @@ export function priceInfo(ref, cfg, orCatalog, mdCatalog) {
   const { provider, model } = splitRef(ref);
 
   const s = staticLookup(cfg, ref);
-  if (s) return { prompt: s.prompt, completion: s.completion, context: s.context ?? null, tools: s.tools !== false, source: s.source, note: s.note };
+  // coding/agentic/intelligence pass through: a local or self-hosted model has no
+  // entry in any public benchmark, and guessing its quality from its name is the
+  // worst option available when its owner knows better.
+  if (s) return { prompt: s.prompt, completion: s.completion, context: s.context ?? null,
+    tools: s.tools !== false, coding: s.coding, agentic: s.agentic, intelligence: s.intelligence,
+    source: s.source, note: s.note };
 
   if (provider === "openrouter" && orCatalog?.[model]) return { ...orCatalog[model], source: "openrouter" };
 
@@ -214,10 +219,19 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
   // that on every single job.
   const health = loadHealth();
   const cooldownMin = cfg.defaults?.modelCooldownMin ?? 30;
+  // Two orderings, in this priority:
+  //  1. a model that just failed goes last — a free endpoint that is down stays
+  //     down for minutes, and rediscovering that on every job is pure waste
+  //  2. otherwise the better model first, scored against today's catalogue rather
+  //     than whatever the ranking looked like when this list was written
+  const rank = cfg.defaults?.rankCandidates !== false;
+  const scoreOf = (ref) => qualityScore(ref, priceInfo(ref, cfg, orCatalog, mdCatalog));
+  const scores = rank ? new Map((prof.candidates ?? []).map((r) => [r, scoreOf(r)])) : null;
   const ordered = [...(prof.candidates ?? [])].sort((a, b) => {
     const ca = isCoolingDown(a, { data: health, cooldownMin }) ? 1 : 0;
     const cb = isCoolingDown(b, { data: health, cooldownMin }) ? 1 : 0;
-    return ca - cb;
+    if (ca !== cb) return ca - cb;
+    return rank ? (scores.get(b) ?? 0) - (scores.get(a) ?? 0) : 0;
   });
   const skipped = (prof.candidates ?? []).filter((m) => isCoolingDown(m, { data: health, cooldownMin }));
 
@@ -227,9 +241,16 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
     if (!chk) continue;
     affordable.push({ cand, chk });
     if (await isKnown(cand)) {
+      const wasFirst = (prof.candidates ?? [])[0];
       return {
         model: cand, price: chk.info, why: `profile "${name}"`,
-        deprioritised: skipped.length && skipped[0] === (prof.candidates ?? [])[0] && cand !== (prof.candidates ?? [])[0]
+        // The failover chain has to follow the same order this decision used,
+        // or the second attempt would ignore the ranking the first one applied.
+        order: ordered,
+        reordered: rank && cand !== wasFirst && !skipped.includes(wasFirst)
+          ? `ranked ahead of ${wasFirst} on today's catalogue`
+          : undefined,
+        deprioritised: skipped.length && skipped[0] === wasFirst && cand !== wasFirst
           ? `${skipped.join(", ")} recently failed and was skipped`
           : undefined
       };
@@ -239,6 +260,7 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
     const { cand, chk } = affordable[0];
     return {
       model: cand, price: chk.info, why: `profile "${name}" (fallback)`,
+      order: ordered,
       warning: `no candidate of profile "${name}" appears in \`opencode models\` — trying ${cand} anyway. Run \`ocfleet doctor\` if it fails.`
     };
   }
@@ -378,9 +400,65 @@ const TIERS = [
  * for. A model may appear in several profiles — that is normal, glm-5.3-flash is
  * both the cheap workhorse and the long-context one.
  */
-export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minContext = 100000, installedOverride, authOverride } = {}) {
-  const orCatalog = await openrouterCatalog({ refresh }).catch(() => ({}));
-  const mdCatalog = await modelsDevCatalog({ refresh }).catch(() => ({}));
+/**
+ * Rewrite the profiles when they have gone stale.
+ *
+ * The scoring is worthless as a one-off: new models appear every few weeks, and a
+ * candidate list written in August quietly stops being the best thing available
+ * without anything breaking — the jobs still run, just not on the best model.
+ *
+ * Everything it can propose has already passed the budget guard, which is what
+ * makes this safe to do unattended: the worst case is a differently-priced model
+ * under the same ceiling, never a premium one and never something denylisted.
+ * Returns null when nothing was due, otherwise what changed.
+ */
+export async function refreshProfilesIfStale(cfg, { cwd, bin, force = false, now = Date.now(), ...suggestOpts } = {}) {
+  const maxAgeDays = cfg.defaults?.profileMaxAgeDays ?? 7;
+  if (!force && !(maxAgeDays > 0)) return null;           // 0 disables it entirely
+  const writtenAt = Date.parse(cfg.profilesWrittenAt ?? "") || 0;
+  // No stamp means these profiles were not written by this mechanism — they were
+  // hand-written, or predate it. Silently replacing someone's own candidate list
+  // on the first delegation is not a refresh, it is losing their work. Running
+  // `ocfleet suggest --write` once stamps the file and opts in.
+  if (!writtenAt && !force) return null;
+  if (!force && now - writtenAt < maxAgeDays * 86400e3) return null;
+
+  const target = path.join(ensureDir(stateDir()), "fleet.config.json");
+  // Never invent a config file the user never had: an auto-refresh may update
+  // what is there, not decide that there should be one.
+  if (!fs.existsSync(target)) return null;
+
+  const r = await suggestProfiles(cfg, { cwd, bin, refresh: true, ...suggestOpts });
+  if (!r?.profiles || !Object.keys(r.profiles).length) return null;
+
+  const before = cfg.profiles ?? {};
+  const changes = [];
+  for (const [name, prof] of Object.entries(r.profiles)) {
+    const was = (before[name]?.candidates ?? []).join(",");
+    const now_ = (prof.candidates ?? []).join(",");
+    if (was !== now_) changes.push({ profile: name, was: before[name]?.candidates ?? [], now: prof.candidates });
+  }
+
+  const current = readJson(target, {});
+  fs.copyFileSync(target, target + ".bak");   // the previous list is one file away
+  current.profiles = r.profiles;
+  current.profilesWrittenAt = new Date(now).toISOString();
+  writeJson(target, current);
+
+  return {
+    rewritten: true, at: current.profilesWrittenAt, file: target,
+    changed: changes.length ? changes : undefined,
+    note: changes.length
+      ? `profiles were ${maxAgeDays}+ days old — re-ranked against the current catalogue (previous list: ${target}.bak)`
+      : `profiles re-checked against the current catalogue; nothing better turned up`
+  };
+}
+
+export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minContext = 100000, installedOverride, authOverride, catalogOverride } = {}) {
+  // catalogOverride exists so this can be tested without the network deciding the
+  // outcome — the ranking is the part worth pinning, not the ability to fetch.
+  const orCatalog = catalogOverride ?? await openrouterCatalog({ refresh }).catch(() => ({}));
+  const mdCatalog = catalogOverride ? {} : await modelsDevCatalog({ refresh }).catch(() => ({}));
   const installed = installedOverride ?? (await installedModelsSmart(cfg, { bin, cwd, refresh }));
 
   // `opencode models` lists providers you have no credentials for; suggesting
@@ -398,6 +476,11 @@ export async function suggestProfiles(cfg, { bin, cwd, refresh = false, minConte
     .filter((r) => (r.info.context ?? 0) >= minContext)
     .filter((r) => r.info.status !== "deprecated")
     .filter((r) => r.info.prompt <= ceiling && r.info.completion <= outCeiling)
+    // The guard has the final say at delegate time, so anything it would refuse
+    // has no business in a profile: it would sit there looking like a fallback
+    // and be skipped on every single job. (It used to — that is how a denylisted
+    // gpt-5 ended up in a suggested "balanced" profile.)
+    .filter((r) => budgetCheck(r.ref, cfg, orCatalog, { mdCatalog }).allowed)
     .map((r) => ({ ...r, score: qualityScore(r.ref, r.info), value: valueScore(r.ref, r.info) }));
 
   const pickDiverse = (pool, description, limit = 4) => {

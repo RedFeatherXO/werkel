@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { stateDir, ensureDir, readJson, writeJson, newId, expandHome, truncate, humanDuration, run, resolveBin } from "./util.mjs";
 import { loadConfig } from "./config.mjs";
-import { resolveModel, openrouterCatalog, modelsDevCatalog, installedModelsSmart, budgetCheck, spentToday, recordSpend, estimateCost, priceInfo } from "./models.mjs";
+import { resolveModel, openrouterCatalog, modelsDevCatalog, installedModelsSmart, budgetCheck, spentToday, recordSpend, estimateCost, priceInfo, refreshProfilesIfStale } from "./models.mjs";
 import { classifyFailure } from "./failover.mjs";
 import { record as recordHealth } from "./health.mjs";
 import { killTree, isAlive } from "./process.mjs";
@@ -111,7 +111,7 @@ export function queuedJobs() {
 export async function delegate(input) {
   const dirIn = expandHome(input.repo || input.dir || process.cwd());
   if (!fs.existsSync(dirIn)) return { error: `directory not found: ${dirIn}` };
-  const cfg = loadConfig(dirIn);
+  let cfg = loadConfig(dirIn);
   const d = cfg.defaults;
 
   if (!input.task?.trim()) return { error: "task is required" };
@@ -129,6 +129,11 @@ export async function delegate(input) {
   const orCatalog = await openrouterCatalog().catch(() => ({}));
   const mdCatalog = await modelsDevCatalog().catch(() => ({}));
   const bin = resolveBin(cfg);
+  // Before choosing anything, make sure the list being chosen from is not months
+  // old. This does nothing on all but roughly one delegation a week.
+  let profileRefresh = null;
+  try { profileRefresh = await refreshProfilesIfStale(cfg, { cwd: dirIn, bin }); } catch { }
+  if (profileRefresh) cfg = loadConfig(dirIn);
   const installed = await installedModelsSmart(cfg, { bin, cwd: dirIn });
   const picked = await resolveModel(
     { model: input.model, profile: input.profile },
@@ -141,7 +146,10 @@ export async function delegate(input) {
   const profileName = input.model ? null : (input.profile ?? cfg.defaults.profile);
   const candidates = [picked.model];
   if (profileName && (input.failover ?? cfg.defaults.failover)) {
-    for (const cand of cfg.profiles?.[profileName]?.candidates ?? []) {
+    // picked.order is the profile ranked by today's scores and pushed back by
+    // recent failures. Using the raw config order here instead would mean the
+    // first attempt follows the ranking and every retry ignores it.
+    for (const cand of picked.order ?? cfg.profiles?.[profileName]?.candidates ?? []) {
       if (candidates.includes(cand)) continue;
       if (budgetCheck(cand, cfg, orCatalog, { spentToday: spend.total ?? 0, mdCatalog }).allowed) candidates.push(cand);
     }
@@ -206,6 +214,10 @@ export async function delegate(input) {
   // worktree is the sandbox" — so when there is no worktree, there is no sandbox,
   // and --auto means nobody is asked before a command runs.
   const notices = [];
+  if (profileRefresh?.changed) {
+    notices.push(`profiles refreshed: ${profileRefresh.changed
+      .map((c) => `${c.profile} now leads with ${c.now[0]}`).join("; ")} — ${profileRefresh.note}`);
+  }
   if (!useWorktree) {
     notices.push(root
       ? `no worktree: the worker works directly in ${dirIn} on the current branch — its changes are not isolated and there is no diff to review`
@@ -225,6 +237,7 @@ export async function delegate(input) {
     timeoutSec: job.timeoutSec,
     fallbacks: candidates.length > 1 ? candidates.slice(1) : undefined,
     warning: picked.warning,
+    reordered: picked.reordered,
     notices: notices.length ? notices : undefined,
     note2: picked.deprioritised,
     spentTodayUsd: spend.total ?? 0
@@ -333,7 +346,18 @@ export async function startQueued() {
     // `continue`, not `break` — a job waiting on a tight cap of its own must not
     // block the ones behind it that were sent with room to spare.
     if (runningJobs().length >= maxConc) continue;
-    const err = await startJob(job, cfg);
+    // One unusable record must not take the whole call down with it. The drainer
+    // runs inside every refresh and every wait, so a job.json that cannot be
+    // launched would otherwise break polling for every other job too.
+    let err;
+    try { err = await startJob(job, cfg); }
+    catch (e) {
+      err = `could not start: ${e.message}`;
+      job.state = "failed";
+      job.error = err;
+      job.endedMs = Date.now();
+      saveJob(job);
+    }
     if (!err) started.push({ id: job.id, model: job.model, title: job.title });
     // Count starts, not scans: skipping a job with a tight cap of its own must not
     // eat the budget for the ones behind it.
@@ -578,6 +602,24 @@ export async function refreshAll({ fillQueue = true } = {}) {
   return pruned.length ? out.filter((j) => !pruned.includes(j.id)) : out;
 }
 
+/**
+ * One line per job, for the poll loop. A blocking wait can only last about fifty
+ * seconds before the bridge to the manager gives up, so a long batch is polled
+ * twenty times or more — and twenty full job views spent saying "still running"
+ * cost more than the work being waited on. Only what changes belongs in a poll.
+ */
+export function jobLine(job) {
+  const d = job.state === "queued"
+    ? `queued ${humanDuration(Date.now() - (job.queuedAt ?? Date.now()))}`
+    : humanDuration(job.durationMs ?? (job.state === "running" ? Date.now() - job.startedMs : null));
+  return `${job.id} ${job.state} ${d} — ${truncate(job.title ?? "", 50, "…")}`;
+}
+
+/** What a poll compares against: everything a manager would want to be told about. */
+export function jobPulse(job) {
+  return `${job.state}:${job.attemptIndex ?? 0}:${job.model ?? ""}`;
+}
+
 export function jobView(job, { verbose = false } = {}) {
   const v = {
     jobId: job.id,
@@ -607,7 +649,8 @@ export function jobView(job, { verbose = false } = {}) {
   }
   if (job.failoverNote) v.failover = job.failoverNote;
   if (verbose) {
-    v.task = job.task;
+    // Not job.task: the manager wrote that work order, and mirroring a
+    // thousand-word brief back at them is the single largest wasted field here.
     v.report = job.report;
     v.tokens = job.tokens;
     v.sessionId = job.sessionId;
@@ -617,11 +660,17 @@ export function jobView(job, { verbose = false } = {}) {
 }
 
 /** Block until the given jobs leave the running state (or the deadline passes). */
+/** What each job looked like the last time a wait reported on it, so the next one
+ *  can stay quiet when nothing moved. In memory only — it is about this
+ *  conversation, not about the jobs. */
+const lastReported = new Map();
+
 export async function waitFor(ids, { timeoutSec = 120, pollMs = 2000 } = {}) {
   const deadline = Date.now() + timeoutSec * 1000;
   const clean = (ids ?? []).filter((i) => typeof i === "string" && i);
   const targets = clean.length ? clean : [...runningJobs(), ...queuedJobs()].map((j) => j.id);
   if (!targets.length) return { done: [], stillRunning: [], note: "no running jobs" };
+  const since = Object.fromEntries(targets.map((id) => [id, lastReported.get(id)]));
   for (;;) {
     const states = [];
     for (const id of targets) states.push(await refresh(id));
@@ -634,9 +683,30 @@ export async function waitFor(ids, { timeoutSec = 120, pollMs = 2000 } = {}) {
     }
     const pending = states.filter((j) => j?.state === "running" || j?.state === "queued");
     if (!pending.length || Date.now() > deadline) {
+      const finished = states.filter((j) => j && j.state !== "running" && j.state !== "queued");
+      // Jobs that finished get the full view plus their report: the caller was
+      // going to ask for it next anyway, and that is a whole round trip through a
+      // bridge that only stays open for a minute at a time.
+      const done = finished.map((j) => {
+        const v = jobView(j);
+        if (j.report) v.report = truncate(j.report, 1500, "\n… [truncated — fleet_result has the rest]");
+        return v;
+      });
+      // Nothing finished and nothing changed state: say so in one line rather than
+      // repeating every field of every job that is simply still busy.
+      const quiet = !done.length && pending.length > 0
+        && pending.every((j) => since[j.id] && since[j.id] === jobPulse(j));
+      for (const j of states) if (j) lastReported.set(j.id, jobPulse(j));
+      // Forget jobs nobody is waiting on any more, so this cannot grow with the
+      // job store the way the dashboard's list used to.
+      for (const id of lastReported.keys()) if (!readJob(id)) lastReported.delete(id);
+
+      // No prose here. Explaining what "unchanged" means belongs in the tool
+      // description, said once — not in every one of twenty poll replies.
+      if (quiet) return { unchanged: true, stillRunning: pending.map(jobLine) };
       return {
-        done: states.filter((j) => j && j.state !== "running" && j.state !== "queued").map((j) => jobView(j)),
-        stillRunning: pending.map((j) => jobView(j)),
+        done,
+        stillRunning: pending.map(jobLine),
         stillQueued: pending.filter((j) => j.state === "queued").length || undefined,
         timedOutWaiting: pending.length > 0
       };

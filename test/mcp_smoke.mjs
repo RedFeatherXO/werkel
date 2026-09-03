@@ -35,10 +35,13 @@ const TEST_HOME = path.join(os.tmpdir(), "opencode-fleet-teststate");
   fsx.mkdirSync(TEST_HOME, { recursive: true });
   fsx.writeFileSync(path.join(TEST_HOME, "fleet.config.json"), JSON.stringify({
     budget: { allow: ["mock/*"], maxDailyUsd: 100 },
+    // Scores are pinned here on purpose: candidates are ordered by quality now, and
+    // the failover test needs the broken model to genuinely be first choice —
+    // otherwise the fleet would sensibly start on the working one and never fail over.
     staticPricing: {
-      "mock/mock-coder": { prompt: 0.05, completion: 0.2, context: 200000, tools: true },
-      "mock/mock-broken": { prompt: 0.05, completion: 0.2, context: 200000, tools: true },
-      "mock/mock-flaky": { prompt: 0.05, completion: 0.2, context: 200000, tools: true }
+      "mock/mock-coder": { prompt: 0.05, completion: 0.2, context: 200000, tools: true, coding: 60, agentic: 60 },
+      "mock/mock-broken": { prompt: 0.05, completion: 0.2, context: 200000, tools: true, coding: 90, agentic: 90 },
+      "mock/mock-flaky": { prompt: 0.05, completion: 0.2, context: 200000, tools: true, coding: 70, agentic: 70 }
     },
     profiles: {
       cheap: { description: "test", candidates: ["mock/mock-coder"] },
@@ -199,7 +202,14 @@ if (!bothDone) { await explainFailure(a.jobId); await explainFailure(b.jobId); a
 
 const res = await call("fleet_result", { jobId: a.jobId });
 ok("result has report", !!res.report, res.report?.slice(0, 50));
-ok("result has diff", res.patch?.includes("a.js"), res.diffstat?.split("\n")[0]);
+// The patch is thousands of tokens and the report usually settles the question,
+// so fleet_result names it and fleet_diff hands it over.
+ok("result names the changed files without shipping the patch",
+   res.diffstat?.includes("a.js") && !res.patch, res.diffstat?.split("\n")[0]);
+ok("result says where the patch is", /fleet_diff/.test(res.patchAvailable ?? ""), res.patchAvailable);
+ok("result gives up the patch when asked",
+   (await call("fleet_result", { jobId: a.jobId, includeDiff: true })).patch?.includes("a.js"));
+ok("result no longer mirrors the work order back", res.task === undefined, String(res.task).slice(0, 40));
 ok("cost tracked", res.costUsd > 0, String(res.costUsd));
 
 const logs = await call("fleet_logs", { jobId: a.jobId });
@@ -391,7 +401,7 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
   ok("failover: switched to the working model", fin?.model === "mock/mock-coder", fin?.model);
   ok("failover: the failed attempt is reported", (fin?.previousAttempts ?? []).some(a => a.includes("mock-broken")),
      (fin?.previousAttempts ?? [])[0] ?? "none recorded");
-  const fres = await call("fleet_result", { jobId: f.jobId });
+  const fres = await call("fleet_result", { jobId: f.jobId, includeDiff: true });
   ok("failover: work actually landed", fres.patch?.includes("b.js"), fres.diffstat?.split("\n")[0]);
   if (fin?.state !== "done") await explainFailure(f.jobId);
   await call("fleet_cleanup", { jobId: f.jobId, force: true });

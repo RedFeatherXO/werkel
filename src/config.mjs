@@ -30,7 +30,16 @@ export const DEFAULTS = {
     // Housekeeping for ~/.opencode-fleet/jobs: once more finished records than
     // this pile up, refreshAll() deletes the oldest ones. A job whose worktree
     // still exists holds unmerged work and is never pruned nor counted. 0 = unlimited.
-    keepJobs: 200
+    keepJobs: 200,
+    // The model landscape moves faster than anyone remembers to re-run `suggest`.
+    // Profiles older than this are re-ranked against the current catalogue on the
+    // next delegation, keeping the previous list as fleet.config.json.bak. Only
+    // models the budget guard already allows can ever be proposed. 0 = never.
+    profileMaxAgeDays: 7,
+    // Within a profile, try the better model first — scored against today's
+    // catalogue, not the order the list happened to be written in. Set false to
+    // have the config order respected literally.
+    rankCandidates: true
   },
 
   budget: {
