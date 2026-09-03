@@ -101,7 +101,8 @@ ocfleet — delegate coding jobs from Claude to OpenCode workers on cheaper mode
   ocfleet mcp                            run as an MCP stdio server (for Claude)
   ocfleet install [--scope user|project|print]   register the MCP server with Claude Code
   ocfleet link [--dir <path>]            put ocfleet on your PATH (default ~/.local/bin)
-  ocfleet experience [--profile <p>]     what each model actually did here, and why
+  ocfleet board [--all]                  every routable model ranked: base score + experience
+  ocfleet experience [--profile <p>]     only the models this fleet has actually used
   ocfleet init-config [--force]          write a starter fleet.config.json
 `;
 
@@ -445,6 +446,33 @@ const cmds = {
    * because copying this repo around (through a file-transfer bridge, a zip on
    * Windows, an editor) drops them silently and then the launcher stops working.
    */
+  async board(a) {
+    const repo = path.resolve(a.flags.repo ?? process.cwd());
+    const { modelBoard } = await import("../src/models.mjs");
+    const rows = await modelBoard(loadConfig(repo), {
+      cwd: repo, refresh: !!a.flags.refresh, includeBlocked: !!a.flags.all
+    });
+    if (a.flags.json) return jsonOut(rows);
+    if (!rows.length) { p("\n  no routable models — run ocfleet doctor\n"); return; }
+
+    const money = (v) => v == null ? "?" : v === 0 ? "0" : v < 0.1 ? v.toFixed(3) : v.toFixed(2);
+    p("");
+    p(`  ${"#".padStart(3)}  ${"model".padEnd(46)} ${"$/Mtok".padStart(14)}  ${"base".padStart(6)} ${"exp".padStart(6)} ${"total".padStart(6)}  jobs`);
+    rows.forEach((r, i) => {
+      const price = r.prompt === 0 && r.completion === 0 ? "free" : `${money(r.prompt)}/${money(r.completion)}`;
+      const exp = r.experience ? (r.experience > 0 ? "+" : "") + r.experience.toFixed(1) : "·";
+      const est = r.capabilitySource !== "artificial-analysis" ? "~" : " ";
+      // padEnd does not shorten, so a long id would push every column after it
+      const name = r.model.length > 46 ? r.model.slice(0, 45) + "…" : r.model.padEnd(46);
+      p(`  ${String(i + 1).padStart(3)}  ${name} ${price.padStart(14)}  ` +
+        `${(r.base?.toFixed(1) ?? "–").padStart(5)}${est} ${exp.padStart(6)} ${(r.total?.toFixed(1) ?? "–").padStart(6)}  ` +
+        `${r.jobs || ""}${r.allowed === false ? "  " + SYM.warn + " " + r.reason : ""}`);
+      for (const nt of (r.notes ?? []).slice(0, 1)) if (nt.note) p(`       ${SYM.dot} ${nt.note}`);
+    });
+    const used = rows.filter((r) => r.jobs > 0).length;
+    p(`\n  ${rows.length} routable, ${used} with experience · base from published benchmarks (~ = estimated from the name), exp is what this fleet learned\n`);
+  },
+
   async experience(a) {
     const { summary, forget: forgetExp } = await import("../src/experience.mjs");
     if (a.flags.forget) {

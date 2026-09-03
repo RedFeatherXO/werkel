@@ -287,6 +287,75 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
 }
 
 /** Every installed model that passes the guard, cheapest first. */
+/**
+ * The whole routable field, ranked — every model this machine could send a job to,
+ * with the score it starts from and whatever this machine has since learned about it.
+ *
+ * The two halves answer different questions and are kept apart on purpose. `base`
+ * comes from published benchmarks and exists for a model nobody here has ever used;
+ * `experience` starts at exactly 0 and only moves once jobs have actually run. A
+ * table that showed only the second would be empty on day one and would never
+ * explain why a model was picked in the first place.
+ */
+export async function modelBoard(cfg, { bin, cwd, refresh = false, includeBlocked = false } = {}) {
+  const orCatalog = await openrouterCatalog({ refresh }).catch(() => ({}));
+  const mdCatalog = await modelsDevCatalog({ refresh }).catch(() => ({}));
+  const installed = await installedModelsSmart(cfg, { bin, cwd, refresh });
+  const maxShift = cfg.defaults?.experienceMaxShift ?? 10;
+
+  // Which profiles would route here, so a row can say why it matters at all.
+  const inProfiles = new Map();
+  for (const [name, prof] of Object.entries(cfg.profiles ?? {})) {
+    for (const ref of prof.candidates ?? []) {
+      if (!inProfiles.has(ref)) inProfiles.set(ref, []);
+      inProfiles.get(ref).push(name);
+    }
+  }
+
+  const rows = [];
+  for (const ref of installed) {
+    const chk = budgetCheck(ref, cfg, orCatalog, { mdCatalog });
+    if (!chk.allowed && !includeBlocked) continue;
+    const info = chk.info;
+    const cap = capabilityOf(ref, info);
+    const base = qualityScore(ref, info);
+    const profiles = inProfiles.get(ref) ?? [];
+
+    // Experience is per profile. A model in two profiles gets the bucket of the
+    // profile it is actually used in; one in none has only the "*" bucket, if any.
+    let best = { profile: null, stats: statsFor(ref, null), bonus: 0 };
+    for (const prof of profiles.length ? profiles : []) {
+      const st = statsFor(ref, prof);
+      if (st.effectiveN > best.stats.effectiveN) best = { profile: prof, stats: st, bonus: 0 };
+    }
+    best.bonus = maxShift > 0 && best.stats.effectiveN > 0
+      ? bonusFor(ref, best.profile, { maxShift, explore: false })
+      : 0;
+
+    rows.push({
+      model: ref,
+      profiles,
+      allowed: chk.allowed,
+      reason: chk.allowed ? undefined : chk.reason,
+      prompt: info.prompt ?? null,
+      completion: info.completion ?? null,
+      context: info.context ?? null,
+      capability: Math.round(cap.value * 10) / 10,
+      capabilitySource: cap.source,
+      value: Math.round(valueScore(ref, info) * 10) / 10,
+      base: Math.round(base * 10) / 10,
+      experience: Math.round(best.bonus * 100) / 100,
+      total: Math.round((base + best.bonus) * 10) / 10,
+      jobs: best.stats.n,
+      goodRate: best.stats.rate,
+      confidence: best.stats.confidence,
+      notes: best.stats.notes ?? []
+    });
+  }
+  rows.sort((a, b) => b.total - a.total || (a.prompt ?? 1e9) - (b.prompt ?? 1e9));
+  return rows;
+}
+
 export async function allowedModels(cfg, { bin, cwd, refresh = false } = {}) {
   const orCatalog = await openrouterCatalog({ refresh }).catch(() => ({}));
   const mdCatalog = await modelsDevCatalog({ refresh }).catch(() => ({}));
@@ -379,7 +448,7 @@ export function valueScore(ref, info) {
   return capabilityOf(ref, info).value / (1 + blendedCost(info));
 }
 
-function qualityScore(ref, info) {
+export function qualityScore(ref, info) {
   const cap = capabilityOf(ref, info);
   let score = cap.value;
   if ((info.context ?? 0) >= 1000000) score += 6;

@@ -7,13 +7,42 @@ themselves keep running wherever your repositories are.
    your PC (jobs run here)                    mini server (this dashboard)
    ───────────────────────                    ────────────────────────────
    ocfleet report --to …   ──push snapshots──▶  cards, live via SSE
+                           ──push the ledger─▶  which models are worth the money
                            ◀──queued commands─  cancel / clean up from the browser
 ```
 
 The machine running the jobs **opens no port**. It pushes, and any command you
 click in the browser rides back in the response to that push.
 
-## Just want to look at your own machine?
+## Two tabs
+
+**Jobs** is the card grid, grouped by day. **Modelle** is the ranking of every
+model this fleet could route a job to — not only the ones it has used.
+
+That distinction is the whole point. **Basis** comes from published benchmarks and
+is there before a single job has run; **Erfahrung** is what this fleet has learned
+and is exactly `±0.0` until the model has actually done something; **Gesamt** is
+the sum, and the table is sorted by it. So the ranking is complete on the day you
+open the dashboard, and a model climbs or falls the moment its first outcome is
+recorded — a `+4.5` on a 77.3 model puts it above an untouched 77.8.
+
+A `~` after the base score means no published benchmark exists for that model and
+it was estimated from its name — deliberately below a measured mid-tier model, so
+an unknown never outranks a proven one on a guess.
+
+The experience column is a diverging bar around a zero line: blue to the right for
+a model that earned its place, red to the left for one that has not. The number
+carries its own sign, so the colour never carries the meaning alone. The note
+explains it in words, which is usually the more useful half.
+
+Several machines reporting into one dashboard are merged per model. The base score
+is shared — it is the same catalogue everywhere — while experience is added up and
+weighted by evidence, never averaged: a laptop with ten jobs does not get the same
+say as a desktop with three hundred.
+
+`ocfleet board` prints the same table in a terminal.
+
+## Just want to look at your own machine?## Just want to look at your own machine?
 
 No server, no token, no Docker:
 
@@ -85,7 +114,9 @@ a review, not a button in a browser tab.
 | POST | `/api/ingest` | ingest token | the reporter pushes; the response carries queued commands |
 | POST | `/api/commands/:id/result` | ingest token | the reporter acknowledges a command |
 | GET | `/api/jobs`, `/api/jobs/:key` | basic auth (if set) | what the page reads |
-| POST | `/api/jobs/:key/cancel`\|`/cleanup` | basic auth (if set) | queue a command |
+| GET | `/api/models` | basic auth (if set) | the model ledger, merged across machines |
+| POST | `/api/jobs/:key/cancel`\|`/cleanup`\|`/forget` | basic auth (if set) | queue a command |
+| POST | `/api/forget` | basic auth (if set) | forget many jobs in one request |
 | GET | `/api/events` | basic auth (if set) | server-sent events |
 | GET | `/healthz` | none | container health check |
 

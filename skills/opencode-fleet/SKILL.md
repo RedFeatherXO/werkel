@@ -183,6 +183,13 @@ limit than the config's — the queue honours it later too.
 
 ## What the fleet learns
 
+Every routable model has a score before a single job has run: `base` from
+published benchmarks (`~` when it had none and was estimated from its name),
+`experience` at exactly 0, `total` the sum the routing sorts by. The experience
+half starts counting the moment the first outcome is recorded, so a model can
+overtake a better-benchmarked one on its own record. `ocfleet board` prints the
+whole field; `fleet_models` covers the same ground from a tool call.
+
 Rankings start from published benchmarks, then bend a little towards what
 happened here. Two rules keep that honest, and both matter:
 

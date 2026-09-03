@@ -19,7 +19,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Configuration is resolved per start(), not at import time, so the same server
 // can be embedded in `ocfleet dashboard` and run standalone in a container.
 let PORT, HOST, DATA_DIR, STATE_FILE, INGEST_TOKEN, USER, PASS, RETENTION;
-let state = { jobs: {}, commands: {}, hosts: {}, forgotten: {} };
+let state = { jobs: {}, commands: {}, hosts: {}, forgotten: {}, models: {} };
 
 function configure(opts = {}) {
   PORT = Number(opts.port ?? process.env.PORT ?? 7777);
@@ -39,9 +39,9 @@ function configure(opts = {}) {
 function loadState() {
   try {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { jobs: raw.jobs ?? {}, commands: raw.commands ?? [], hosts: raw.hosts ?? {}, forgotten: raw.forgotten ?? {} };
+    return { jobs: raw.jobs ?? {}, commands: raw.commands ?? [], hosts: raw.hosts ?? {}, forgotten: raw.forgotten ?? {}, models: raw.models ?? {} };
   } catch {
-    return { jobs: {}, commands: [], hosts: {}, forgotten: {} };
+    return { jobs: {}, commands: [], hosts: {}, forgotten: {}, models: {} };
   }
 }
 
@@ -178,6 +178,12 @@ async function handle(req, res) {
       seen.push(key);
       if (!prev || prev.state !== j.state) broadcast("job", state.jobs[key]);
     }
+    // Kept per host and replaced wholesale: the reporter's view is authoritative,
+    // and a model that stopped being used should stop being listed.
+    if (Array.isArray(body.models)) {
+      state.models[host] = body.models;
+      broadcast("models", { host, rows: body.models.length });
+    }
     state.hosts[host] = { lastSeen: Date.now(), jobs: seen.length };
     prune();
     saveSoon();
@@ -233,6 +239,50 @@ async function handle(req, res) {
     broadcast("forget", { keys: forgotten });
     saveSoon();
     return json(res, 200, { ok: true, forgotten: forgotten.length, commands });
+  }
+
+  if (req.method === "GET" && p === "/api/models") {
+    // Every machine reports the same catalogue, so the base score is shared and
+    // simply taken from whichever host mentioned the model. Experience is not
+    // shared: it is added up, weighted by evidence, because averaging two rates
+    // would let a laptop with ten jobs outvote a desktop with three hundred —
+    // the exact bias the ledger exists to avoid.
+    const merged = new Map();
+    for (const [host, rows] of Object.entries(state.models)) {
+      for (const r of rows ?? []) {
+        const m = merged.get(r.model) ?? { ...r, hosts: [], jobs: 0, weighted: 0, evidence: 0, notes: [] };
+        m.base = r.base ?? m.base;
+        m.prompt = r.prompt ?? m.prompt;
+        m.completion = r.completion ?? m.completion;
+        m.context = r.context ?? m.context;
+        m.capability = r.capability ?? m.capability;
+        m.capabilitySource = r.capabilitySource ?? m.capabilitySource;
+        m.profiles = [...new Set([...(m.profiles ?? []), ...(r.profiles ?? [])])];
+        m.jobs += r.jobs ?? 0;
+        // Reconstruct the evidence behind each host's number so the shares can be
+        // combined rather than averaged.
+        const ev = (r.confidence ?? 0) > 0 && (r.confidence ?? 0) < 1
+          ? (8 * r.confidence) / (1 - r.confidence) : 0;
+        m.evidence += ev;
+        m.weighted += (r.goodRate ?? 0) * ev;
+        for (const n of r.notes ?? []) m.notes.push({ ...n, host });
+        if (!m.hosts.includes(host)) m.hosts.push(host);
+        merged.set(r.model, m);
+      }
+    }
+    const rows = [...merged.values()].map((m) => {
+      const goodRate = m.evidence > 0 ? m.weighted / m.evidence : null;
+      const confidence = m.evidence / (m.evidence + 8);
+      // Recomputed from the merged evidence, not carried over from one host.
+      const experience = m.evidence > 0 ? (goodRate - 0.5) * 2 * 10 * confidence : 0;
+      return {
+        ...m, goodRate, confidence,
+        experience: Math.round(experience * 100) / 100,
+        total: Math.round((m.base + experience) * 10) / 10,
+        notes: m.notes.sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, 3)
+      };
+    }).sort((a, b) => b.total - a.total || (a.prompt ?? 1e9) - (b.prompt ?? 1e9));
+    return json(res, 200, { models: rows });
   }
 
   if (req.method === "GET" && p === "/api/jobs") {

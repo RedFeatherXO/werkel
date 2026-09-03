@@ -93,6 +93,49 @@ try {
   const restored = await (await fetch(BASE + "/api/jobs")).json();
   ok("survives a restart", restored.jobs.length === 3, `${restored.jobs.length} jobs restored`);
 
+  // --- the model board travels with the push and merges across machines
+  //
+  // The point of the board is that it is complete from day one: every routable
+  // model with the score it starts from, and an experience column that is zero
+  // until something has actually run.
+  const boardRow = (model, base, extra = {}) => ({
+    model, base, prompt: 0.1, completion: 0.4, context: 200000, capability: base,
+    capabilitySource: "artificial-analysis", profiles: ["cheap"],
+    experience: 0, total: base, jobs: 0, goodRate: null, confidence: 0, notes: [], ...extra
+  });
+
+  await post("/api/ingest", { host: "meik-desktop", ts: Date.now(), jobs: [], models: [
+    boardRow("openrouter/never/used", 70),
+    // a slightly worse benchmark that the fleet's own evidence lifts past it
+    boardRow("openrouter/z-ai/glm-5.3-flash", 68, {
+      experience: 5.7, total: 73.7, jobs: 30, goodRate: 0.9, confidence: 0.71,
+      notes: [{ at: Date.now(), source: "rated", note: "inverted a default" }] })
+  ] });
+  const bo = (await (await fetch(BASE + "/api/models")).json()).models;
+  ok("serves every routable model, not only the used ones", bo.length === 2, `${bo.length} rows`);
+  const unused = bo.find((r) => r.model === "openrouter/never/used");
+  ok("an untouched model still has its benchmark score", unused.base === 70, String(unused.base));
+  ok("and exactly no adjustment", unused.experience === 0 && unused.total === 70,
+     `exp=${unused.experience} total=${unused.total}`);
+  ok("the adjustment counts the moment it exists",
+     bo[0].model === "openrouter/z-ai/glm-5.3-flash" && bo[0].total > unused.total,
+     `${bo[0].model} ${bo[0].total} vs ${unused.total} — 68 + 5.7 must outrank a bare 70`);
+  ok("keeps the note that explains the number", bo[0].notes?.[0]?.note === "inverted a default");
+
+  await post("/api/ingest", { host: "laptop", ts: Date.now(), jobs: [], models: [
+    boardRow("openrouter/z-ai/glm-5.3-flash", 68, {
+      experience: 0.4, total: 68.4, jobs: 10, goodRate: 0.5, confidence: 0.55, notes: [] })
+  ] });
+  const merged = (await (await fetch(BASE + "/api/models")).json()).models;
+  const glm = merged.find((r) => r.model === "openrouter/z-ai/glm-5.3-flash");
+  ok("one model across two machines is one row", merged.length === 2, `${merged.length} rows`);
+  ok("evidence adds up instead of being averaged", glm.jobs === 40, `jobs=${glm.jobs}`);
+  // 0.9 over ~19.6 effective and 0.5 over ~9.8 must weight towards the busier host,
+  // not land on the midpoint (0.7) that averaging two rates would give
+  ok("the merged rate is weighted by evidence", glm.goodRate > 0.72 && glm.goodRate < 0.79,
+     String(glm.goodRate));
+  ok("both machines are named", (glm.hosts ?? []).length === 2, JSON.stringify(glm.hosts));
+
   // --- forget: deleting a job must survive the reporter's full-list pushes
   const fkey = "meik-desktop:20260831-2";
   ok("queues a forget from the browser",

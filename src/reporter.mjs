@@ -1,9 +1,12 @@
 import os from "node:os";
 import { refreshAll, jobView, readJob, cancel, forget } from "./jobs.mjs";
 import { diffSummary, removeWorktree } from "./worktree.mjs";
+import { modelBoard } from "./models.mjs";
+import { loadConfig } from "./config.mjs";
 import { truncate } from "./util.mjs";
 
-const MAX_JOBS = 100; // newest only — keeps the POST body well under 2 MB
+const MAX_JOBS = 100;   // newest only — keeps the POST body well under 2 MB
+const BOARD_EVERY_MS = 10 * 60_000;   // the model field, refreshed every ten minutes
 const MAX_REPORT_CHARS = 4000;
 const HTTP_TIMEOUT_MS = 10000;
 
@@ -49,6 +52,9 @@ export async function report({ to, token, host, intervalSec = 5, once = false, l
   const base = String(to).replace(/\/+$/, "");
   const who = host ?? os.hostname();
   const wait = Math.max(1, Number(intervalSec) || 5) * 1000;
+  // Building the board runs `opencode models` and reads two catalogues. That is
+  // far too expensive for a five-second push loop, and the answer barely moves.
+  let board = [], boardAt = 0;
 
   for (;;) {
     let sent = 0, executed = 0;
@@ -62,7 +68,17 @@ export async function report({ to, token, host, intervalSec = 5, once = false, l
         catch (e) { snapshots.push({ jobId: job.id, state: job.state, snapshotError: e.message }); }
       }
       sent = snapshots.length;
-      const res = await postJson(`${base}/api/ingest`, { host: who, ts: Date.now(), jobs: snapshots }, token);
+      // The whole routable field, not only the models that happen to have been used:
+      // a ranking that starts empty and fills up over weeks answers no question on
+      // the day you open it. Every model carries the score it starts from, and an
+      // experience column that is exactly 0 until it has actually run something.
+      // Refreshed on its own clock — the catalogue moves in hours, not seconds.
+      if (!boardAt || Date.now() - boardAt > BOARD_EVERY_MS) {
+        try { board = await modelBoard(loadConfig()); boardAt = Date.now(); }
+        catch (e) { log(`model board unavailable: ${e.message}`); }
+      }
+      const models = board;
+      const res = await postJson(`${base}/api/ingest`, { host: who, ts: Date.now(), jobs: snapshots, models }, token);
       for (const cmd of res?.commands ?? []) {
         let ok = true, error;
         if (cmd.action === "cancel") {

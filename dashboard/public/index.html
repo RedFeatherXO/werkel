@@ -4,17 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fleet</title>
+<!-- Inline, so the page stops asking for a favicon that was never served and
+     leaving a 404 in everyone's console. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Crect x='3.5' y='6.5' width='3' height='6' rx='1' fill='%23fff'/%3E%3Crect x='9.5' y='3.5' width='3' height='9' rx='1' fill='%23fff'/%3E%3C/svg%3E">
 <style>
   :root {
     color-scheme: light dark;
     --bg: #f6f7f9; --panel: #ffffff; --line: #e2e5ea; --ink: #14161a; --muted: #6b7280;
     --running: #2563eb; --done: #16a34a; --failed: #dc2626; --timeout: #d97706; --cancelled: #6b7280; --queued: #8b5cf6;
+    /* Diverging pair for the score column: blue and red read as opposites, and the
+       midpoint is a neutral grey so "no adjustment" looks like nothing rather than
+       like a third category. Validated for colour-vision deficiency (worst adjacent
+       pair ΔE 21.6 under protanopia). The sign is always printed too, so the colour
+       never carries the meaning on its own. */
+    --pos: #2a78d6; --neg: #e34948; --mid: #f0efec;
     --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0e1013; --panel: #161a1f; --line: #262b33; --ink: #e8eaed; --muted: #9aa3af;
       --running: #60a5fa; --done: #4ade80; --failed: #f87171; --timeout: #fbbf24; --cancelled: #9ca3af; --queued: #a78bfa;
+      --pos: #3987e5; --neg: #e66767; --mid: #383835;
       --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
     }
   }
@@ -40,7 +50,52 @@
   }
   .filters button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 
+  /* display:flex on .filters beats the hidden attribute, so switching tabs left the
+     job filters standing over a table they cannot filter. */
+  [hidden] { display: none !important; }
+
+  .tabs { display: flex; gap: 4px; margin-right: 4px; }
+  .tabs button {
+    font: inherit; font-size: 12.5px; padding: 5px 13px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+  }
+  .tabs button[aria-selected="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
   main { padding: 20px; }
+
+  .mwrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); }
+  table.models { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.models th {
+    text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--muted); padding: 11px 14px; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  table.models td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.models tr:last-child td { border-bottom: 0; }
+  table.models .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  table.models .mdl { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  table.models .prof { color: var(--muted); font-size: 12px; }
+  table.models .note { color: var(--muted); font-size: 12px; max-width: 380px; }
+
+  /* Diverging bar: one baseline at the centre, marks growing left (negative) and
+     right (positive), 4px rounded at the data end and square at the baseline. */
+  .meter { display: flex; align-items: center; gap: 9px; }
+  .meter .track { position: relative; width: 108px; height: 9px; background: var(--mid); border-radius: 2px; flex: none; }
+  .meter .track::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line); }
+  .meter .fill { position: absolute; top: 0; bottom: 0; }
+  .meter .fill[data-sign="pos"] { left: 50%; background: var(--pos); border-radius: 0 4px 4px 0; }
+  .meter .fill[data-sign="neg"] { right: 50%; background: var(--neg); border-radius: 4px 0 0 4px; }
+  .meter b { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 42px; }
+
+  table.models .rank { color: var(--muted); width: 1%; }
+  table.models .tot b { font-weight: 650; }
+  table.models .est { color: var(--muted); }
+  table.models .z { color: var(--muted); opacity: .55; }
+  table.models .tags { display: inline-flex; gap: 4px; margin-left: 8px; }
+  table.models .tags i {
+    font-style: normal; font-size: 10.5px; padding: 1px 6px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  #mnote { color: var(--muted); font-size: 12px; padding: 10px 2px 0; }
   .groups { display: flex; flex-direction: column; gap: 14px; }
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
   .group {
@@ -142,6 +197,10 @@
     <span><b id="s-cost">$0</b> gesamt</span>
     <span id="s-hosts"></span>
   </div>
+  <div class="tabs" id="tabs" role="tablist">
+    <button role="tab" data-tab="jobs" aria-selected="true">Jobs</button>
+    <button role="tab" data-tab="models" aria-selected="false">Modelle</button>
+  </div>
   <div class="filters" id="filters">
     <button data-filter="all" aria-pressed="true">Alle</button>
     <button data-filter="running" aria-pressed="false">Laufend</button>
@@ -151,7 +210,17 @@
   </div>
 </header>
 
-<main><div class="groups" id="grid"></div><div class="empty" id="empty" hidden></div></main>
+<main>
+  <div id="panel-jobs">
+    <div class="groups" id="grid"></div>
+    <div class="empty" id="empty" hidden></div>
+  </div>
+  <div id="panel-models" hidden>
+    <div class="mwrap"><table class="models" id="mtable"></table></div>
+    <div id="mnote"></div>
+    <div class="empty" id="mempty" hidden></div>
+  </div>
+</main>
 
 <dialog id="sheet"><div class="sheet">
   <header><h1 id="d-title">…</h1><span class="when" id="d-when"></span></header>
@@ -168,6 +237,8 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let jobs = [];
+let models = [];
+let tab = "jobs";
 let filter = "all";
 let openKey = null;
 let armedDay = null;
@@ -411,6 +482,83 @@ async function forgetDay(day) {
   }
 }
 
+const MAX_SHIFT = 10;   // matches defaults.experienceMaxShift on the job machine
+
+/** One diverging bar. The sign is printed next to it, so the colour is never the
+ *  only thing carrying the meaning. */
+function meter(bonus) {
+  const v = Math.max(-MAX_SHIFT, Math.min(MAX_SHIFT, Number(bonus) || 0));
+  const pct = Math.abs(v) / MAX_SHIFT * 50;
+  const sign = v >= 0 ? "pos" : "neg";
+  const label = (v > 0 ? "+" : v < 0 ? "−" : "±") + Math.abs(v).toFixed(1);
+  return `<span class="meter"><span class="track">` +
+    (Math.abs(v) < 0.05 ? "" : `<span class="fill" data-sign="${sign}" style="width:${pct}%"></span>`) +
+    `</span><b>${label}</b></span>`;
+}
+
+// Two decimals everywhere so the column lines up, three only where two would
+// round a real price to zero. Stripping trailing zeros produced "$0." for a free
+// model and mixed "$0.3" with "$2.50" in the same cell.
+const money = (v) => v == null ? "?" : v === 0 ? "0" : v < 0.1 ? v.toFixed(3) : v.toFixed(2);
+const fmtPrice = (p, c) => p == null ? "–" : (p === 0 && c === 0) ? "frei" : `$${money(p)} / $${money(c)}`;
+const fmtCtx = (n) => n == null ? "–" : n >= 1e6 ? (n / 1e6).toFixed(1).replace(".0", "") + "M" : Math.round(n / 1000) + "k";
+
+function renderModels() {
+  const t = $("mtable");
+  if (!models.length) {
+    t.innerHTML = "";
+    $("mempty").hidden = false;
+    $("mempty").innerHTML = "Keine Modelle gemeldet. Der Reporter schickt die Rangliste alle zehn Minuten mit — " +
+      "läuft er schon? <code>ocfleet report --to " + esc(location.origin) + "</code>";
+    return;
+  }
+  $("mempty").hidden = true;
+  const row = (r, i) => {
+    const note = (r.notes ?? []).map((n) => n.note).filter(Boolean)[0];
+    const est = r.capabilitySource !== "artificial-analysis";
+    return `<tr>
+      <td class="num rank">${i + 1}</td>
+      <td class="mdl">${esc(r.model)}${r.profiles?.length ? `<span class="tags">${r.profiles.map((p) => `<i>${esc(p)}</i>`).join("")}</span>` : ""}</td>
+      <td class="num">${fmtPrice(r.prompt, r.completion)}</td>
+      <td class="num">${fmtCtx(r.context)}</td>
+      <td class="num${est ? " est" : ""}" title="${est ? "aus dem Namen geschätzt — kein veröffentlichter Benchmark" : "Artificial Analysis"}">${r.base?.toFixed(1) ?? "–"}${est ? "~" : ""}</td>
+      <td>${meter(r.experience)}</td>
+      <td class="num tot"><b>${r.total?.toFixed(1) ?? "–"}</b></td>
+      <td class="num">${r.jobs ? r.jobs : "<span class=\"z\">0</span>"}</td>
+      <td class="note">${note ? esc(note) : ""}</td>
+    </tr>`;
+  };
+  const used = models.filter((r) => r.jobs > 0).length;
+  t.innerHTML = `<thead><tr>
+      <th class="num">#</th><th>Modell</th>
+      <th class="num" title="Preis pro 1M Token, rein / raus">Preis</th>
+      <th class="num">Kontext</th>
+      <th class="num" title="Aus veröffentlichten Benchmarks — steht fest, bevor je ein Job lief">Basis</th>
+      <th title="Was diese Flotte gelernt hat. Startet bei 0 und verschiebt sich erst beim Verwenden.">Erfahrung</th>
+      <th class="num">Gesamt</th>
+      <th class="num">Jobs</th>
+      <th>Zuletzt aufgefallen</th>
+    </tr></thead><tbody>${models.map(row).join("")}</tbody>`;
+  $("mnote").textContent = `${models.length} routbare Modelle · ${used} davon mit Erfahrung`;
+}
+
+function setTab(name) {
+  tab = name;
+  for (const b of $("tabs").querySelectorAll("button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
+  $("panel-jobs").hidden = name !== "jobs";
+  $("panel-models").hidden = name !== "models";
+  $("filters").hidden = name !== "jobs";      // the filters only mean anything for jobs
+  if (name === "models") loadModels();
+}
+
+async function loadModels() {
+  try {
+    const r = await fetch("/api/models");
+    models = (await r.json()).models || [];
+  } catch { models = []; }
+  renderModels();
+}
+
 async function load() {
   const r = await fetch("/api/jobs");
   const b = await r.json();
@@ -454,6 +602,14 @@ es.addEventListener("command", load);
 // The bulk /api/forget broadcasts only this — without it a second open tab would
 // keep showing the deleted cards until the next push happened to arrive.
 es.addEventListener("forget", load);
+// The ledger only changes when a job ends, so it is cheap to refresh on the same
+// beat as everything else — but only while the table is actually on screen.
+es.addEventListener("models", () => { if (tab === "models") loadModels(); });
+
+$("tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  if (b) setTab(b.dataset.tab);
+});
 es.onerror = () => $("live").classList.add("stale");
 
 load();
