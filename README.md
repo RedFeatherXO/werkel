@@ -7,30 +7,12 @@ workers running whatever model you point them at — Qwen3-Coder, GLM, DeepSeek,
 Ollama model — while Claude stays the manager: it writes the work order, reviews every
 diff, and decides what lands.
 
-```
-   Claude (manager)                    werkel (MCP)              OpenCode workers
-   ─────────────────                   ────────────────────              ─────────────────
-   splits the work        ──delegate──▶  budget guard                ──▶ job A · qwen3-coder
-   writes work orders                    git worktree per job        ──▶ job B · glm-4.7-flash
-   reviews the diffs      ◀──result───   detached runs, cost log     ──▶ job C · deepseek
-   merges what is good    ──apply────▶   merge / squash / patch
-```
+Every job runs in its own **git worktree on its own branch**, so eight workers can run at
+once without stepping on each other, and nothing reaches your working tree until you merge
+it. A **price guard** refuses any model above your ceiling and stops work at a daily spend
+limit.
 
-Every job runs in its own **git worktree on its own branch**, so four workers can run at
-once without stepping on each other, and nothing reaches your working tree until you
-merge it. A **price guard** refuses any model above your ceiling and stops work at a
-daily spend limit.
-
-## Install
-
-```bash
-git clone <your-fork> werkel && cd werkel
-bash scripts/install.sh       # checks node/git/opencode, registers the MCP server, installs the skill
-opencode auth login           # openrouter (recommended), zai, deepseek, …
-werkel doctor --warmup
-```
-
-### One command
+## Quick start
 
 **Linux / macOS**
 
@@ -44,58 +26,61 @@ curl -fsSL https://raw.githubusercontent.com/RedFeatherXO/werkel/main/scripts/bo
 irm https://raw.githubusercontent.com/RedFeatherXO/werkel/main/scripts/bootstrap.ps1 | iex
 ```
 
-Both clone into `~/werkel` (override with `WERKEL_DIR`), check node and
-git, and run the installer for your platform. Run either again later and it pulls
-and re-installs instead of cloning — the same line is also the updater.
+Then three commands, once:
 
-Piping a script from the internet into a shell means running code you have not
-read, which is a reasonable thing to object to. The two-step version does exactly
-the same work and lets you look first:
+```bash
+opencode auth login       # openrouter (recommended), zai, deepseek, opencode zen …
+werkel suggest --write    # build model profiles from the providers you just logged into
+werkel doctor --warmup    # verify, and pre-download the provider package
+```
+
+Restart Claude, and ask it in plain language:
+
+> Delegate the retry-wrapper refactor in `src/api/` to a cheap worker, add tests for the
+> parser in parallel, and show me the diffs before anything lands.
+
+That is the whole setup. No npm dependencies — plain Node ≥18, git, and the `opencode` CLI.
+
+<details>
+<summary>What the one-liner does, and how to do it by hand instead</summary>
+
+Both bootstrap scripts clone into `~/werkel` (override with `WERKEL_DIR`), check node and
+git, and run the installer for your platform. Run either again later and it pulls and
+re-installs instead of cloning — the same line is also the updater.
+
+Piping a script from the internet into a shell means running code you have not read, which
+is a reasonable thing to object to. The two-step version does exactly the same work and
+lets you look first:
 
 ```bash
 git clone https://github.com/RedFeatherXO/werkel && cd werkel
-bash scripts/install.sh          # or: powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+bash scripts/install.sh
+# Windows: powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
-No npm dependencies — plain Node ≥18, git, and the `opencode` CLI.
+`--warmup` matters on the first run: OpenCode downloads a provider package the first time
+it really runs, which otherwise looks like a hang.
+</details>
 
-### If `werkel` is not found
+<details>
+<summary>If <code>werkel</code> is not found</summary>
 
-`install.sh` symlinks it into `~/.local/bin`. If that directory is new, your shell
-does not know about it yet — open a new one, or run the linker on its own:
+The installer symlinks it into `~/.local/bin`. If that directory is new, your shell does not
+know about it yet — open a new terminal, or run the linker on its own:
 
 ```bash
 node bin/werkel.mjs link                 # also repairs the executable bits
 node bin/werkel.mjs link --dir ~/bin     # somewhere else on your PATH
 ```
 
-`./werkel` from the repo folder always works and needs no setup at all. Copying
-this repo through a zip, an editor or a file-sync bridge tends to drop the
-executable bit; `link` puts it back, which is why it is safe to re-run.
+`./werkel` from the repo folder always works and needs no setup at all. Copying this repo
+through a zip, an editor or a file-sync bridge tends to drop the executable bit; `link` puts
+it back, which is why it is safe to re-run. On Windows it prints the PATH line to add,
+because there is no symlink to make.
+</details>
 
-### Platforms
-
-Linux, macOS and Windows. Jobs are started by a small node runner rather than a
-shell script, so there is one code path everywhere: no `/bin/sh`, no POSIX
-quoting, and paths with spaces are handled by passing an argv array instead of a
-command line. On Windows the runner stops a job's process tree with `taskkill /T`;
-on POSIX it signals the process group.
-
-On Windows, use `scripts\install.ps1` instead of `install.sh`:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
-```
-
-One caveat that is not ours: **opencode itself recommends WSL on Windows** for
-full compatibility. werkel runs natively either way, but if workers behave
-strangely there, try the same setup inside WSL before suspecting werkel —
-`werkel doctor` prints this note on Windows for the same reason.
-
-`--warmup` matters: OpenCode downloads a provider package on its very first real run, which
-otherwise looks like a hang.
-
-### Registering with Claude manually
+<details>
+<summary>Registering with Claude by hand</summary>
 
 ```json
 { "mcpServers": {
@@ -104,38 +89,64 @@ otherwise looks like a hang.
 
 Claude Code: `claude mcp add --scope user werkel -- node /abs/path/bin/werkel.mjs mcp`
 
-The manager skill (`skills/werkel/SKILL.md`) teaches Claude when to delegate, how to
-brief a worker and what to look for in a review. Copy it to `~/.claude/skills/` (the
-installer does this).
+The manager skill (`skills/werkel/SKILL.md`) teaches Claude when to delegate, how to brief a
+worker and what to look for in a review. Copy it to `~/.claude/skills/` — the installer does
+this for you.
+</details>
 
-## How to call it
+<details>
+<summary>Windows notes</summary>
 
-Three equivalent ways, pick one:
+Jobs are started by a small node runner rather than a shell script, so there is one code path
+everywhere: no `/bin/sh`, no POSIX quoting, and paths with spaces are handled by passing an
+argv array instead of a command line. On Windows the runner stops a job's process tree with
+`taskkill /T`; on POSIX it signals the process group. The test suite runs on Linux, Windows
+and macOS in CI.
 
-```bash
-werkel doctor              # after ./scripts/install.sh registered the command
-./werkel doctor            # launcher in this folder, works immediately
-node bin/werkel.mjs doctor # always works, no setup at all
+One caveat that is not ours: **opencode itself recommends WSL on Windows** for full
+compatibility. werkel runs natively either way, but if workers behave strangely there, try
+the same setup inside WSL before suspecting werkel — `werkel doctor` prints this note on
+Windows for the same reason.
+</details>
+
+## How it works
+
+```
+   Claude (manager)                    werkel (MCP)              OpenCode workers
+   ─────────────────                   ────────────────────      ─────────────────
+   splits the work        ──delegate──▶  budget guard        ──▶ job A · qwen3-coder
+   writes work orders                    git worktree per job ──▶ job B · glm-5.3-flash
+   reviews the diffs      ◀──result───   detached runs, cost log ─▶ job C · deepseek
+   merges what is good    ──apply────▶   merge / squash / patch
 ```
 
-On Windows use `.\werkel doctor` or `node bin\werkel.mjs doctor`. The examples
-below write `werkel` for brevity.
+1. `werkel_delegate` resolves a model through the budget guard and pins the base commit.
+2. If a worker slot is free the job starts at once: branch `werkel/<jobId>` plus a worktree
+   under `~/.werkel/worktrees/`. If all slots are busy the job is **queued**, not refused —
+   it comes back with a `queuePosition` and starts on its own when a slot frees up. Send as
+   many jobs as the work has.
+3. The task becomes a structured work order (`prompt.md`): task, manager context, files,
+   constraints, verification command, definition of done, and a fixed report format.
+4. OpenCode runs **detached**; a runner process enforces the timeout and records the exit
+   code, so a job survives an MCP restart and can never hang a tool call.
+5. On completion werkel commits the worker's changes on its branch, parses tokens and cost
+   from the event stream, and hands the freed slot to whichever job has waited longest.
+6. You review, then merge, squash, or export a patch.
 
-## Use it
+The concurrency limit is about the machine, not the money: each worker is an opencode process
+plus a full working copy on disk, and providers rate-limit parallel requests from one key. The
+daily spend cap and the price ceilings are separate, and they refuse rather than queue.
 
-Ask Claude, in plain language:
+Job state lives in `~/.werkel/jobs/<id>/`: `prompt.md`, `events.ndjson`, `stderr.log`,
+`run.json`, `job.json`. Nothing is hidden.
 
-> Delegate the retry-wrapper refactor in `src/api/` to a cheap worker, add tests for the
-> parser in parallel, and show me the diffs before anything lands.
+## From a shell
 
-Claude then drives the tools itself. From a shell the same engine is available:
+Claude drives the tools itself, but the same engine is a CLI:
 
 ```bash
 werkel dashboard --open             # every worker as a card, locally, no setup
-werkel probe                        # which models actually answer right now
-werkel health                       # what werkel learned about availability
-werkel models                       # what you can route to, with prices
-werkel suggest --write              # build profiles from your authenticated providers
+werkel board                        # every routable model ranked, with what werkel learned
 werkel delegate "Wrap every fetch in src/api/*.ts in withRetry" \
    --repo . --profile cheap \
    --context "withRetry lives in src/lib/retry.ts and takes (fn, opts)" \
@@ -146,6 +157,10 @@ werkel apply <jobId> --mode squash  # land it
 werkel cleanup <jobId>
 ```
 
+Three equivalent ways to call it: `werkel …` once it is on your PATH, `./werkel …` from the
+repo folder, or `node bin/werkel.mjs …` which always works. On Windows: `.\werkel` or
+`node bin\werkel.mjs`.
+
 ## The tools Claude gets
 
 | Tool | What it does |
@@ -153,19 +168,20 @@ werkel cleanup <jobId>
 | `werkel_delegate` | Start a job (returns immediately with a jobId; queues it if every slot is busy) |
 | `werkel_wait` | Block until jobs finish — starts waiting jobs as slots free up |
 | `werkel_status` | Running + queued + recent jobs, cost, duration |
-| `werkel_result` | Worker report + changed files + patch |
-| `werkel_diff` | Just the patch |
+| `werkel_result` | Worker report + changed files + diffstat |
+| `werkel_diff` | The patch |
 | `werkel_logs` | Every tool call the worker made (catches fake "tests pass") |
 | `werkel_followup` | Send review feedback into the same session/worktree |
 | `werkel_apply` | merge / squash / write a .patch |
+| `werkel_rate` | Record how a job actually turned out, so routing learns |
 | `werkel_cancel`, `werkel_cleanup` | Kill a job, remove worktree + branch |
-| `werkel_models` | Routable models with prices and guard verdicts (`suggest:true` proposes profiles) |
+| `werkel_models` | Routable models with prices and guard verdicts |
 | `werkel_doctor` | Binaries, providers, profiles, budget, stuck jobs |
 
 ## Configuration
 
-`~/.werkel/werkel.config.json` (global) or `.werkel.json` in a repo.
-Start from [`config/werkel.config.example.json`](config/werkel.config.example.json).
+`~/.werkel/werkel.config.json` (global) or `.werkel.json` in a repo. Start from
+[`config/werkel.config.example.json`](config/werkel.config.example.json).
 
 ```jsonc
 {
@@ -175,111 +191,74 @@ Start from [`config/werkel.config.example.json`](config/werkel.config.example.js
     "maxDailyUsd": 10.0,             // werkel stops for the day
     "requireToolSupport": true,      // a model without tool calling cannot edit files
     "deny": ["*gpt-5*", "*claude*"]  // never route here
-  },
-  "profiles": {
-    "cheap":    { "candidates": ["openrouter/qwen/qwen3-coder-30b-a3b-instruct", "openrouter/z-ai/glm-4.7-flash"] },
-    "balanced": { "candidates": ["openrouter/qwen/qwen3-coder", "zai/glm-4.7"] },
-    "strong":   { "candidates": ["openrouter/qwen/qwen3-coder-plus", "openrouter/moonshotai/kimi-k2.7-code"] }
   }
 }
 ```
 
-Prices come from [models.dev](https://models.dev) — the same catalogue OpenCode resolves
-models against, so every provider it can reach is covered (OpenCode Zen, Z.ai, DeepSeek,
-OpenRouter, …) — plus OpenRouter's live API for `openrouter/*`, both cached 24 h. Entries in
-`staticPricing` override both. A model whose price cannot be established is refused rather
-than silently billed. Provider setup for OpenCode itself:
-[`config/opencode.providers.example.json`](config/opencode.providers.example.json).
+A model whose price cannot be established is refused rather than silently billed. Prices come
+from [models.dev](https://models.dev) — the same catalogue OpenCode resolves against — plus
+OpenRouter's live API for `openrouter/*`, both cached 24 h.
 
-Models are ranked on published benchmarks, not guesswork. The OpenRouter catalogue
-carries Artificial Analysis indices for ~165 of its models, and werkel scores a
-worker as `0.6 × coding_index + 0.4 × agentic_index` — a worker has to write the code
-*and* drive the tools. `value = capability / (1 + blended price)` with
-`blended = (3 × input + output) / 4`, since a coding turn reads far more than it writes.
-Models without published numbers are estimated from their name, deliberately below a
-measured mid-tier model, so an unknown never outranks a proven one. `werkel models`
-prints both numbers (`~` marks an estimate).
+**Don't hand-write candidate lists.** `werkel suggest --write` builds them from the providers
+you actually hold credentials for (read from opencode's auth store — keys are never read, only
+provider names), so a profile cannot point at something that would hang on first use. Profiles
+older than a week re-rank themselves against the current catalogue on the next delegation.
 
-Don't hand-write candidate lists — generate them from what you actually have:
+<details>
+<summary>How models are ranked</summary>
 
-```bash
-werkel suggest           # show proposed profiles, ranked by price and coding fitness
-werkel suggest --write   # write them into ~/.werkel/werkel.config.json (keeps a .bak)
-```
+On published benchmarks, not guesswork. The OpenRouter catalogue carries Artificial Analysis
+indices for many of its models, and werkel scores a worker as
+`0.6 × coding_index + 0.4 × agentic_index` — a worker has to write the code *and* drive the
+tools. `value = capability / (1 + blended price)` with `blended = (3 × input + output) / 4`,
+since a coding turn reads far more than it writes. Models without published numbers are
+estimated from their name, deliberately below a measured mid-tier model, so an unknown never
+outranks a proven one on a guess. `werkel board` prints both (`~` marks an estimate).
 
-Free endpoints also collapse under parallel load — a measured run of ten
-simultaneous jobs on a free model produced three HTTP 429s and a vanished
-worker, while the same jobs on `cheap` cost a few cents and completed. Use free
-models for sequential bulk work, not for fan-out.
+On top of that sits what *your* jobs did: whether you merged the diff, whether it needed a
+second round, whether it claimed a verification it never ran. That moves a model by at most
+±10 points, scaled by how much evidence there is — zero evidence moves it exactly zero, and
+one lucky job cannot outweigh a hundred. Weight halves every 45 days and every 30 jobs, so a
+model that gets worse loses its lead within a few dozen jobs rather than coasting on history.
 
-Free endpoints go down for minutes at a time. werkel remembers that: a model
-that fails with a provider error is skipped for the next 30 minutes and the job
-moves straight to the profile's next candidate, instead of rediscovering the
-outage every time. `werkel health` shows what it learned, `werkel probe` tests
-every candidate on purpose before you rely on them, and a success clears a
-model's record immediately.
-
-It only proposes models from providers you hold credentials for (read from opencode's
-auth store and your config — keys are never read, only provider names), so a suggested
-profile cannot point at a provider that would hang on first use.
-
-A profile resolves to the first candidate that is both affordable and reachable. If none is
-listed by `opencode models` (which can lag right after adding a provider) the first
-affordable candidate runs anyway, with a warning — a stale model list never blocks work.
-
-## How a job runs
-
-1. `werkel_delegate` resolves a model through the budget guard and pins the base commit.
-2. If a worker slot is free the job starts at once: `werkel/<jobId>` plus a worktree under
-   `~/.werkel/worktrees/`. If all `maxConcurrentJobs` slots are busy the job is
-   **queued**, not refused — it comes back with a `queuePosition` and starts on its own when
-   a slot frees up. Send as many jobs as the work has.
-3. The task becomes a structured work order (`jobDir/prompt.md`): task, manager context,
-   files, constraints, verification command, definition of done, and a fixed report format.
-4. OpenCode runs **detached** with `--format json`; a runner process enforces the timeout and
-   records the exit code, so a job survives an MCP restart and can never hang a tool call.
-5. On completion the harness commits the worker's changes on its branch, parses tokens and
-   cost from the event stream, and appends to `~/.werkel/spend/<date>.json` — and
-   hands the freed slot to whichever job has been waiting longest.
-6. You review, then merge, squash, or export a patch.
-
-The concurrency limit is about the machine, not the money: each worker is an opencode
-process plus a full working copy on disk, and providers rate-limit parallel requests from
-one key. The daily spend cap and the price ceilings are separate, and they refuse rather
-than queue. A queued job keeps the base commit it was submitted against, so a long wait
-never silently changes what the worker started from.
-
-Job state lives in `~/.werkel/jobs/<id>/`: `prompt.md`, `events.ndjson`,
-`stderr.log`, `run.json`, `job.json`. Nothing is hidden.
+Free endpoints go down for minutes at a time, and collapse under parallel load: a measured run
+of ten simultaneous jobs on a free model produced three HTTP 429s and a vanished worker. werkel
+remembers a provider failure and skips that model for 30 minutes rather than rediscovering the
+outage on every job. `werkel health` shows what it learned; `werkel probe` tests every candidate
+before you rely on them. Use free models for sequential bulk work, not for fan-out.
+</details>
 
 ## Safety notes
 
-Workers run with `--auto` (auto-approved permissions) because the worktree is the sandbox:
-a job can only damage its own branch, and you see the diff before it lands.
+Workers run with `--auto` (auto-approved permissions) because the worktree is the sandbox: a
+job can only damage its own branch, and you see the diff before it lands.
 
 **`--auto` is also why "ask" is not a restriction.** It answers every permission prompt with
-yes, so a setting of `ask` and a setting of `allow` behave identically. Only `deny` restricts
-anything, and `readOnly: true` denies all four: edit, write, patch — and bash. A read-only
-worker gets `read`, `grep`, `glob` and `webfetch`, and cannot change a byte.
+yes, so `ask` and `allow` behave identically. Only `deny` restricts anything, and
+`readOnly: true` denies all four: edit, write, patch — and bash. A read-only worker gets
+`read`, `grep`, `glob` and `webfetch`, and cannot change a byte.
 
-That last one costs you test runs, so there is an opt-out: pass a `verify` command (or
-`allowBash: true`) and the shell comes back, edits stay denied, and the job result says so
-in `notices`. Useful for "investigate this failure and run the suite", but be honest about
-what it is — a shell that can write files even though the file tools cannot.
+That costs you test runs, so there is an opt-out: pass a `verify` command (or
+`allowBash: true`) and the shell comes back, edits stay denied, and the job result says so in
+`notices`. Useful for "investigate this failure and run the suite" — but be honest about what
+it is: a shell that can write files even though the file tools cannot.
 
-**No worktree means no sandbox.** `worktree: false` puts the worker in your actual directory
-on your actual branch, with auto-approved permissions and no diff to review. It is the right
-choice for read-only investigation and the wrong one for almost everything else;
-`werkel_delegate` says so in `notices` every time, whether the directory is a git repo or not.
+**No worktree means no sandbox.** `worktree: false` puts the worker in your actual directory on
+your actual branch, with auto-approved permissions and no diff to review. Right for read-only
+investigation, wrong for almost everything else; `werkel_delegate` says so in `notices` every
+time.
 
 ## Development
 
 ```bash
-node test/mcp_smoke.mjs /tmp/werkel-testrepo
+npm test              # unit tests, mock provider, then the full end-to-end suite
+npm run test:unit     # fast: no opencode, no network
+npm run test:dashboard
 ```
 
-The suite drives the MCP server over real stdio JSON-RPC against a mock OpenAI-compatible
-model (`test/mock_llm.py`), so it exercises delegation, parallel worktrees, follow-up
-rounds, merge conflicts and the budget guard without spending anything.
+The end-to-end suite drives the MCP server over real stdio JSON-RPC against a mock
+OpenAI-compatible model (`test/mock_llm.py`), so it exercises delegation, parallel worktrees,
+follow-up rounds, merge conflicts, failover and the budget guard without spending anything.
+CI runs it on Linux, Windows and macOS.
 
 MIT licensed.
