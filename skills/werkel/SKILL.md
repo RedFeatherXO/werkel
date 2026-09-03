@@ -22,8 +22,34 @@ like and how to check it.
 | Applying one pattern to N call sites | The first instance of a new pattern (do it yourself, then delegate the rest) |
 | Read-only investigation across a large codebase | Final diagnosis and the fix strategy |
 | Doc strings, type annotations, dead-code removal | Anything you cannot verify afterwards |
+| **Building a module from a spec you just wrote** | Writing that spec |
 
-If writing the work order takes longer than doing the change, do it yourself.
+If writing the work order takes longer than doing the change, do it yourself. That
+is a real brake and it applies to small edits — but do not let it talk you out of
+the case below, where the work order already exists.
+
+### The moment worth catching
+
+**You have just written an architecture or a spec. That is the strongest point to
+delegate in the whole session,** and it is easy to walk past because it does not
+feel like "a task" — it feels like the beginning of the work.
+
+Three things line up there at once:
+
+- The expensive half is done. The research, the decisions, the interface — that is
+  the work order, already written, and it cost you nothing extra to reuse.
+- A new module has no existing code to break, and its files belong to nobody else,
+  so several of them can be built at once without conflicting.
+- The spec says what "done" means, which is the one thing a worker cannot infer.
+
+So: write the spec yourself, decide the file boundaries, then hand out one job per
+file or per module with the relevant section of the spec as `context`. Build the
+first instance yourself only if the pattern is genuinely new and you cannot
+describe it — otherwise describing it *is* the work order.
+
+**Greenfield needs one commit first.** `git worktree add` cannot branch from a
+repository with no commits, so commit a baseline before the first delegation.
+`werkel_delegate` will tell you this if you forget, but it costs a round trip.
 
 ## What a worker is allowed to do
 

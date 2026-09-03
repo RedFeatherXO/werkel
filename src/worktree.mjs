@@ -41,6 +41,16 @@ export async function createWorktree(repo, jobId, cfg, { baseRef } = {}) {
 
   const r = await git(root, ["worktree", "add", "-b", branch, wtPath, base]);
   if (!r.ok) {
+    // A repository with no commits yet cannot be branched from, and git says so
+    // as "invalid reference: HEAD" — accurate, and useless if you do not already
+    // know what it means. This is the first thing a greenfield build hits.
+    const hasCommit = (await git(root, ["rev-parse", "--verify", "HEAD"])).ok;
+    if (!hasCommit) {
+      return { mode: "error", path: null, branch, base,
+        error: `${root} has no commits yet, so there is nothing to branch a worktree from.`,
+        hint: "Commit a baseline first (git add -A && git commit -m init), then delegate — "
+            + "or pass worktree:false to let the worker write straight into the directory." };
+    }
     return { mode: "error", path: null, branch, base,
       error: `git worktree add failed: ${truncate(r.stderr || r.error, 400)}` };
   }
