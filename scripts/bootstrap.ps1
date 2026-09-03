@@ -7,8 +7,8 @@
 #   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 $ErrorActionPreference = "Stop"
 
-$repo = if ($env:OCFLEET_REPO) { $env:OCFLEET_REPO } else { "https://github.com/RedFeatherXO/werkel" }
-$dir  = if ($env:OCFLEET_DIR)  { $env:OCFLEET_DIR }  else { Join-Path $HOME "werkel" }
+$repo = if ($env:WERKEL_REPO) { $env:WERKEL_REPO } else { "https://github.com/RedFeatherXO/werkel" }
+$dir  = if ($env:WERKEL_DIR)  { $env:WERKEL_DIR }  else { Join-Path $HOME "werkel" }
 function Say($m) { Write-Host "  $m" }
 
 Write-Host ""

@@ -8,8 +8,8 @@
 #   git clone https://github.com/RedFeatherXO/werkel && cd werkel && bash scripts/install.sh
 set -euo pipefail
 
-REPO="${OCFLEET_REPO:-https://github.com/RedFeatherXO/werkel}"
-DIR="${OCFLEET_DIR:-$HOME/werkel}"
+REPO="${WERKEL_REPO:-https://github.com/RedFeatherXO/werkel}"
+DIR="${WERKEL_DIR:-$HOME/werkel}"
 say() { printf "  %s\n" "$*"; }
 
 echo
