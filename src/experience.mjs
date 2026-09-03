@@ -26,6 +26,16 @@ const FILE = () => path.join(ensureDir(stateDir()), "experience.json");
 // the same id, so what was true three months ago is only half as true now.
 const DEFAULT_HALF_LIFE_DAYS = 45;
 
+// And it halves again every 30 jobs, counting back from the newest.
+//
+// Time decay alone was not enough, and the reason is worth keeping: at twenty
+// jobs a day, forty-five days is nine hundred jobs, so every event inside a week
+// weighed the same and the score was an all-time average wearing a moving
+// average's clothes. A model with two hundred good jobs behind it could fail
+// forty in a row and still score +5.7. "Has this got worse" is a question about
+// recent jobs, not recent days, so it needs a decay measured in jobs.
+const DEFAULT_COUNT_HALF_LIFE = 30;
+
 // Raw counts are never trusted for scoring, but the ledger still needs a
 // ceiling so one chatty caller cannot grow the file without end.
 const MAX_EVENTS = 200;
@@ -95,13 +105,20 @@ export function record({ model, profile, outcome, weight = 1, source, note, at =
  * as `w * 0.5 ** (ageDays / halfLifeDays)`, so a verdict from one half-life
  * back is worth half of one from today.
  */
-export function statsFor(model, profile, { now = Date.now(), halfLifeDays = DEFAULT_HALF_LIFE_DAYS, data } = {}) {
+export function statsFor(model, profile, { now = Date.now(), halfLifeDays = DEFAULT_HALF_LIFE_DAYS, countHalfLife = DEFAULT_COUNT_HALF_LIFE, data } = {}) {
   const bucket = (data ?? load())[bucketKey(model, profile)];
-  const events = eventsOf(bucket);
+  const events = eventsOf(bucket).slice().sort((a, b) => a.t - b.t);
   let successes = 0, failures = 0, lastAt = null;
   const noted = [];
-  for (const e of events) {
-    const w = e.w * Math.pow(0.5, (now - e.t) / DAY_MS / halfLifeDays);
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    // Two decays, multiplied: one in days, one in jobs since the newest event.
+    // Either alone leaves a hole — days ignore a busy week, jobs ignore a model
+    // that has sat untouched since spring.
+    const rank = events.length - 1 - i;
+    const w = e.w
+      * Math.pow(0.5, (now - e.t) / DAY_MS / halfLifeDays)
+      * (countHalfLife > 0 ? Math.pow(0.5, rank / countHalfLife) : 1);
     successes += w * e.o;
     failures += w * (1 - e.o);
     if (lastAt == null || e.t > lastAt) lastAt = e.t;
@@ -165,8 +182,8 @@ function sampleBeta(alpha, beta, random) {
  * With no evidence at all the bonus is exactly 0 — an unused model sits
  * exactly at its benchmark rank, not at a guess.
  */
-export function bonusFor(model, profile, { maxShift = 10, explore = true, now, halfLifeDays, data, random = Math.random } = {}) {
-  const s = statsFor(model, profile, { now, halfLifeDays, data });
+export function bonusFor(model, profile, { maxShift = 10, explore = true, now, halfLifeDays, countHalfLife, data, random = Math.random } = {}) {
+  const s = statsFor(model, profile, { now, halfLifeDays, countHalfLife, data });
   if (!(s.effectiveN > 0)) return 0;
   const alpha = PRIOR + s.successes;
   const beta = PRIOR + s.failures;
@@ -179,7 +196,7 @@ export function bonusFor(model, profile, { maxShift = 10, explore = true, now, h
 }
 
 /** One row per bucket, busiest evidence first. The bonus is explore:false so the table does not jitter between reads. */
-export function summary({ now, halfLifeDays, data } = {}) {
+export function summary({ now, halfLifeDays, countHalfLife, data } = {}) {
   const store = data ?? load();
   const at = now ?? Date.now();
   return Object.entries(store)
@@ -187,11 +204,11 @@ export function summary({ now, halfLifeDays, data } = {}) {
       const i = key.indexOf("|");
       const profile = i < 0 ? "*" : key.slice(0, i);
       const model = i < 0 ? key : key.slice(i + 1);
-      const s = statsFor(model, profile, { now: at, halfLifeDays, data: store });
+      const s = statsFor(model, profile, { now: at, halfLifeDays, countHalfLife, data: store });
       return {
         profile, model,
         n: s.n, effectiveN: s.effectiveN, rate: s.rate, confidence: s.confidence,
-        bonus: bonusFor(model, profile, { explore: false, now: at, halfLifeDays, data: store }),
+        bonus: bonusFor(model, profile, { explore: false, now: at, halfLifeDays, countHalfLife, data: store }),
         lastAt: s.lastAt, notes: s.notes
       };
     })

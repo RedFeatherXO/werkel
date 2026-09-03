@@ -128,6 +128,32 @@ failure modes:
 `fleet_logs` shows every tool call the worker made; use it whenever the diff and
 the report disagree, or a job failed.
 
+### Leave a verdict behind
+
+The fleet already records the things it can see for itself: whether you applied
+the diff, whether you needed a follow-up, whether the job failed, and whether the
+report claimed a verification that never ran. Those accumulate on their own.
+
+**`fleet_rate` is for what those miss.** Call it when the outcome does not tell
+the story:
+
+- work that looked fine, was merged, and turned out to be wrong
+- a job you discarded for reasons that had nothing to do with the worker
+- a specific failure worth warning the next manager about
+
+The `why` is worth more than the rating and is capped at 200 characters. Write
+the thing that would have saved you time: *"inverted the collapsed-by-default
+rule while implementing its persistence"* beats *"decent work"*. It is shown to
+whoever delegates to that model next, in the `experience` field of
+`fleet_delegate`.
+
+Rating the same job again replaces the earlier verdict — that is how you correct
+one that turned out to be wrong, and it is the only honest way to change your
+mind, since a job must not get to vote twice.
+
+Read the `experience` field before you write a work order. If it says a model
+keeps producing stubs, either brief against that explicitly or pick another one.
+
 ## Parallel work, honestly
 
 **Send as many jobs as the work has.** Nothing is ever refused for being the
@@ -154,6 +180,31 @@ A queued job pins its base commit at submission time, so ten jobs sent against
 one state all see that state, however long the last one waits. Pass
 `maxConcurrent` on a single `fleet_delegate` call to hold that job to a tighter
 limit than the config's — the queue honours it later too.
+
+## What the fleet learns
+
+Rankings start from published benchmarks, then bend a little towards what
+happened here. Two rules keep that honest, and both matter:
+
+- **Rates, never sums.** The model you use most would otherwise win by volume
+  alone. And a rate on its own is worse — one job at 100% would beat 170 of 200 —
+  so the adjustment is scaled by how much evidence there is. Zero evidence moves
+  a model exactly zero.
+- **Only within a profile.** `strong` sees only the hard jobs and would look
+  worse than `cheap` for reasons that have nothing to do with the models. A model
+  is only ever compared against the others in the same tier.
+
+Nothing ratchets. There is no stored rating that only moves up — the adjustment is
+recomputed from the recent history every time, and weight halves both every 45 days
+and every 30 jobs. A model that was reliable and starts failing loses its bonus
+within a few dozen jobs, and one that was bad can climb back the same way.
+
+Provider outages are deliberately not part of this: a 503 says the endpoint was
+down, not that the model writes bad code, and that already lives in the health
+ledger. `ocfleet experience` shows what has accumulated.
+
+Expect it to say nothing for a while. Below roughly fifty jobs on a model the
+adjustment is near zero by design, which is the correct behaviour and not a bug.
 
 ## Cost discipline
 

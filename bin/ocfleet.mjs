@@ -101,6 +101,7 @@ ocfleet — delegate coding jobs from Claude to OpenCode workers on cheaper mode
   ocfleet mcp                            run as an MCP stdio server (for Claude)
   ocfleet install [--scope user|project|print]   register the MCP server with Claude Code
   ocfleet link [--dir <path>]            put ocfleet on your PATH (default ~/.local/bin)
+  ocfleet experience [--profile <p>]     what each model actually did here, and why
   ocfleet init-config [--force]          write a starter fleet.config.json
 `;
 
@@ -444,6 +445,31 @@ const cmds = {
    * because copying this repo around (through a file-transfer bridge, a zip on
    * Windows, an editor) drops them silently and then the launcher stops working.
    */
+  async experience(a) {
+    const { summary, forget: forgetExp } = await import("../src/experience.mjs");
+    if (a.flags.forget) {
+      const n = forgetExp(a.flags.forget, a.flags.profile ?? null);
+      p(`\n  ${SYM.ok} cleared ${n} bucket(s) for ${a.flags.forget}\n`);
+      return;
+    }
+    let rows = summary();
+    if (a.flags.profile) rows = rows.filter((r) => r.profile === a.flags.profile);
+    if (a.flags.json) return jsonOut(rows);
+    if (!rows.length) {
+      p("\n  nothing recorded yet — the fleet learns from applied diffs, follow-ups and fleet_rate\n");
+      return;
+    }
+    p("");
+    for (const r of rows) {
+      const rate = r.rate == null ? "  –  " : String(Math.round(r.rate * 100)).padStart(3) + "%";
+      const bonus = (r.bonus >= 0 ? "+" : "") + r.bonus.toFixed(1);
+      p(`  ${String(r.profile).padEnd(12)} ${r.model.padEnd(42)} ${String(r.n).padStart(3)} jobs  ${rate} good  ` +
+        `${String(Math.round(r.confidence * 100)).padStart(3)}% sure  score ${bonus}`);
+      for (const nt of (r.notes ?? []).slice(0, 2)) if (nt.note) p(`       ${SYM.dot} ${nt.note}`);
+    }
+    p(`\n  score is the nudge added to the published benchmark, capped by defaults.experienceMaxShift\n`);
+  },
+
   async link(a) {
     const { chmodSync, existsSync, mkdirSync, symlinkSync, unlinkSync, lstatSync } = fs;
     const launcher = path.join(ROOT, process.platform === "win32" ? "ocfleet.cmd" : "ocfleet");

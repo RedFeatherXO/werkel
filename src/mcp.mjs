@@ -101,6 +101,16 @@ const TOOLS = [
     inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, force: { type: "boolean", description: "Discard uncommitted worker changes" }, deleteBranch: { type: "boolean", description: "Default true" }, purge: { type: "boolean", description: "Also delete the job record itself, so it disappears from status and the dashboard" } } }
   },
   {
+    name: "fleet_rate",
+    description: "Record how a finished job actually turned out, after you have read the diff. This is the one judgement the fleet cannot make for itself, and it outweighs every signal it collects on its own. Rate a job once you know — landing it, discarding it or sending a follow-up are already recorded automatically, so rate when you have something those do not capture: work that looked fine and was wrong, a fake verification, or a job that was better than its outcome suggests. Rating the same job again replaces the earlier verdict, which is how you correct one that turned out to be wrong.",
+    inputSchema: { type: "object", required: ["jobId", "outcome"], properties: {
+      jobId: S.jobId,
+      outcome: { type: "string", enum: ["good", "mixed", "bad"], description: "good = you would delegate this again; mixed = usable after fixing; bad = you threw it away or it cost more to fix than to do yourself" },
+      why: { type: "string", description: "At most 200 characters, and worth more than the rating: what specifically this model did, so the next manager reads it before delegating. \"Inverted the collapsed-by-default rule while implementing its persistence\" beats \"decent work\"." },
+      issue: { type: "string", enum: ["scope-creep", "fake-verification", "stub", "invented-api", "missed-requirement", "broke-tests", "none"], description: "Which classic worker failure this was, when it was one of them." }
+    } }
+  },
+  {
     name: "fleet_models",
     description: "Which models this machine can actually route to, with price per 1M tokens and whether the budget guard allows them. Check this before picking a model explicitly.",
     inputSchema: { type: "object", properties: { refresh: { type: "boolean", description: "Re-fetch the OpenRouter catalogue and the opencode model list" }, all: { type: "boolean", description: "Include models the guard blocks, with the reason" }, repo: { type: "string", description: "Repo whose local config should apply" } } }
@@ -114,7 +124,7 @@ const TOOLS = [
 
 // ---- handlers -------------------------------------------------------------
 
-const NEEDS_JOB = new Set(["fleet_status", "fleet_result", "fleet_diff", "fleet_logs", "fleet_followup", "fleet_apply", "fleet_cancel", "fleet_cleanup"]);
+const NEEDS_JOB = new Set(["fleet_status", "fleet_result", "fleet_diff", "fleet_logs", "fleet_followup", "fleet_apply", "fleet_cancel", "fleet_cleanup", "fleet_rate"]);
 
 async function callTool(name, a = {}) {
   // a missing id used to crash on path.join(undefined); say what is wrong instead
@@ -200,7 +210,18 @@ async function callTool(name, a = {}) {
       const job = await J.refresh(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
       if (job.state === "running") return { error: "job is still running" };
-      return await applyJob(job, { mode: a.mode ?? "merge", target: a.target, message: a.message });
+      const r = await applyJob(job, { mode: a.mode ?? "merge", target: a.target, message: a.message });
+      // Landing the work is the strongest verdict anyone gives a worker, and until
+      // now it left no trace at all — five minutes later an accepted job and a
+      // discarded one looked identical on disk.
+      if (r?.ok) J.markApplied(job, r.mode);
+      return r;
+    }
+
+    case "fleet_rate": {
+      const job = J.readJob(a.jobId);
+      if (!job) return { error: `unknown job ${a.jobId}` };
+      return J.rate(job, a);
     }
 
     case "fleet_cancel": return await J.cancel(a.jobId);
@@ -209,6 +230,7 @@ async function callTool(name, a = {}) {
       const job = J.readJob(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
       if (a.purge) return await J.forget(a.jobId, { force: a.force });
+      J.noteDiscardedIfUnused(job);
       return await removeWorktree(job, { force: a.force, deleteBranch: a.deleteBranch !== false });
     }
 

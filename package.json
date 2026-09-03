@@ -8,8 +8,8 @@
   "scripts": {
     "doctor": "node bin/ocfleet.mjs doctor",
     "mcp": "node bin/ocfleet.mjs mcp",
-    "test": "node --test test/budget.test.mjs test/failover.test.mjs test/runner.test.mjs test/health.test.mjs test/permission.test.mjs test/forget.test.mjs test/wait.test.mjs test/profiles.test.mjs && node scripts/run-mock-selftest.mjs && node test/mcp_smoke.mjs",
-    "test:unit": "node --test test/budget.test.mjs test/failover.test.mjs test/runner.test.mjs test/health.test.mjs test/permission.test.mjs test/forget.test.mjs test/wait.test.mjs test/profiles.test.mjs",
+    "test": "node --test test/budget.test.mjs test/failover.test.mjs test/runner.test.mjs test/health.test.mjs test/permission.test.mjs test/forget.test.mjs test/wait.test.mjs test/profiles.test.mjs test/experience.test.mjs test/outcome.test.mjs && node scripts/run-mock-selftest.mjs && node test/mcp_smoke.mjs",
+    "test:unit": "node --test test/budget.test.mjs test/failover.test.mjs test/runner.test.mjs test/health.test.mjs test/permission.test.mjs test/forget.test.mjs test/wait.test.mjs test/profiles.test.mjs test/experience.test.mjs test/outcome.test.mjs",
     "test:mock": "python3 test/mock_llm_selftest.py",
     "test:dashboard": "node dashboard/selftest.mjs && node dashboard/integration.mjs && node dashboard/local.test.mjs",
     "dashboard": "node bin/ocfleet.mjs dashboard --open",

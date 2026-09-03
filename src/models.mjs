@@ -3,6 +3,7 @@ import path from "node:path";
 import { stateDir, ensureDir, readJson, writeJson, run, globMatch, today, resolveBin } from "./util.mjs";
 import { modelsDevCatalog, lookupModelsDev, providerModels, authenticatedProviders } from "./catalog.mjs";
 import { isCoolingDown, load as loadHealth } from "./health.mjs";
+import { bonusFor, statsFor } from "./experience.mjs";
 
 const CACHE = () => ensureDir(path.join(stateDir(), "cache"));
 const OR_URL = "https://openrouter.ai/api/v1/models";
@@ -225,7 +226,15 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
   //  2. otherwise the better model first, scored against today's catalogue rather
   //     than whatever the ranking looked like when this list was written
   const rank = cfg.defaults?.rankCandidates !== false;
-  const scoreOf = (ref) => qualityScore(ref, priceInfo(ref, cfg, orCatalog, mdCatalog));
+  // Published benchmarks say how good a model is in general; what happened on this
+  // machine says how it does on this repo, with these prompts, judged by whoever
+  // reviews the diffs. The second is far more relevant and far thinner, so it only
+  // ever nudges — experienceMaxShift caps how far, and the module itself scales the
+  // nudge by how much evidence there actually is.
+  const maxShift = cfg.defaults?.experienceMaxShift ?? 10;
+  const explore = cfg.defaults?.experienceExploration !== false;
+  const expBonus = (ref) => maxShift > 0 ? bonusFor(ref, name, { maxShift, explore }) : 0;
+  const scoreOf = (ref) => qualityScore(ref, priceInfo(ref, cfg, orCatalog, mdCatalog)) + expBonus(ref);
   const scores = rank ? new Map((prof.candidates ?? []).map((r) => [r, scoreOf(r)])) : null;
   const ordered = [...(prof.candidates ?? [])].sort((a, b) => {
     const ca = isCoolingDown(a, { data: health, cooldownMin }) ? 1 : 0;
@@ -242,8 +251,14 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
     affordable.push({ cand, chk });
     if (await isKnown(cand)) {
       const wasFirst = (prof.candidates ?? [])[0];
+      const st = statsFor(cand, name);
       return {
         model: cand, price: chk.info, why: `profile "${name}"`,
+        experience: st.effectiveN > 0
+          ? { jobs: st.n, good: st.rate == null ? null : Math.round(st.rate * 100) + "%",
+              confidence: Math.round(st.confidence * 100) + "%",
+              notes: st.notes?.map((x) => x.note).filter(Boolean).slice(0, 2) }
+          : undefined,
         // The failover chain has to follow the same order this decision used,
         // or the second attempt would ignore the ranking the first one applied.
         order: ordered,

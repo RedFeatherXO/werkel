@@ -158,3 +158,70 @@ test("record buckets a null profile under * and forget removes buckets", () => {
   assert.equal(forget("m1", null), 1);
   assert.deepEqual(load(), {});
 });
+
+// --- decay measured in jobs, not only in days -----------------------------
+//
+// Time decay alone made this an all-time average wearing a moving average's
+// clothes: at twenty jobs a day, a 45-day half-life is nine hundred jobs, so
+// everything inside a week weighed the same. A model with two hundred good jobs
+// behind it could fail forty in a row and still score positive.
+
+const run = (goods, bads, t = now) => {
+  const events = [];
+  for (let i = 0; i < goods; i++) events.push(good(t - (goods + bads - i) * 1000));
+  for (let i = 0; i < bads; i++) events.push(bad(t - (bads - i) * 1000));
+  return bucket(events);
+};
+
+test("a long good history does not survive a run of failures", () => {
+  const opts = { explore: false, now };
+  const before = bonusFor("a/b", "cheap", { ...opts, data: run(200, 0) });
+  assert.ok(before > 6, `a clean record should score well, got ${before}`);
+  // this is the regression: with time decay alone this was still +5.7
+  const after = bonusFor("a/b", "cheap", { ...opts, data: run(200, 40) });
+  assert.ok(after < 0,
+    `40 consecutive failures must outweigh an old good record, got ${after.toFixed(2)}`);
+});
+
+test("the drop is gradual, not a cliff", () => {
+  const at = (n) => bonusFor("a/b", "cheap", { explore: false, now, data: run(200, n) });
+  const steps = [0, 5, 10, 20, 30, 40].map(at);
+  for (let i = 1; i < steps.length; i++) {
+    assert.ok(steps[i] < steps[i - 1], `step ${i} did not fall: ${steps.join(", ")}`);
+  }
+});
+
+test("a model that recovers is allowed to recover", () => {
+  const sunk = bonusFor("a/b", "cheap", { explore: false, now, data: run(0, 15) });
+  assert.ok(sunk < -4, `15 failures should hurt, got ${sunk}`);
+  // 30 good jobs after those 15 failures must bring it back above zero
+  const events = [...run(0, 15)["cheap|a/b"].events];
+  for (let i = 0; i < 30; i++) events.push(good(now - (30 - i) * 1000));
+  const healed = bonusFor("a/b", "cheap", { explore: false, now, data: bucket(events) });
+  assert.ok(healed > 0, `a model that got good again must climb back, got ${healed.toFixed(2)}`);
+});
+
+test("evidence saturates, so no history is ever unassailable", () => {
+  const s = statsFor("a/b", "cheap", { now, data: run(1000, 0) });
+  assert.ok(s.effectiveN < 60, `effective evidence must not grow without bound, got ${s.effectiveN}`);
+  assert.ok(s.confidence < 0.9,
+    "a rolling window can never make you fully certain, and pretending otherwise is the bug");
+  assert.ok(bonusFor("a/b", "cheap", { explore: false, now, data: run(1000, 0) }) <= 10);
+});
+
+test("countHalfLife: 0 turns the job-count decay off", () => {
+  const withCount = bonusFor("a/b", "cheap", { explore: false, now, data: run(200, 40) });
+  const timeOnly = bonusFor("a/b", "cheap", { explore: false, now, countHalfLife: 0, data: run(200, 40) });
+  assert.ok(timeOnly > withCount,
+    "without the count decay the old good record still dominates — that was the old behaviour");
+});
+
+test("order matters now: the same jobs in a different order score differently", () => {
+  const worsening = bonusFor("a/b", "cheap", { explore: false, now, data: run(20, 20) });
+  const events = [];
+  for (let i = 0; i < 20; i++) events.push(bad(now - (40 - i) * 1000));
+  for (let i = 0; i < 20; i++) events.push(good(now - (20 - i) * 1000));
+  const gettingBetter = bonusFor("a/b", "cheap", { explore: false, now, data: bucket(events) });
+  assert.ok(gettingBetter > worsening,
+    `a model on the way up must beat one on the way down with the same totals: ${gettingBetter.toFixed(2)} vs ${worsening.toFixed(2)}`);
+});

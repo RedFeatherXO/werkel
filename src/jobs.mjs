@@ -11,6 +11,8 @@ import { killTree, isAlive } from "./process.mjs";
 import { gitBin } from "./util.mjs";
 import { createWorktree, commitAll, diffSummary, repoRoot, headSha, removeWorktree } from "./worktree.mjs";
 import { buildWorkerPrompt, buildFollowupPrompt } from "./prompt.mjs";
+import { noteOutcome, isRateable, claimedUnrunVerification, WEIGHTS } from "./outcome.mjs";
+import { statsFor } from "./experience.mjs";
 
 export const jobsDir = () => ensureDir(path.join(stateDir(), "jobs"));
 export const jobDir = (id) => path.join(jobsDir(), id);
@@ -238,6 +240,9 @@ export async function delegate(input) {
     fallbacks: candidates.length > 1 ? candidates.slice(1) : undefined,
     warning: picked.warning,
     reordered: picked.reordered,
+    // What this model did here before, so the manager reads it before the diff
+    // rather than rediscovering the same failure mode for the third time.
+    experience: picked.experience,
     notices: notices.length ? notices : undefined,
     note2: picked.deprioritised,
     spentTodayUsd: spend.total ?? 0
@@ -537,6 +542,21 @@ export async function refresh(id) {
     if (c.error) job.commitError = c.error;
   }
   if (job.costUsd) recordSpend(job.id, job.model, job.costUsd);
+
+  // What this attempt says about the model that ran it. Deliberately narrow:
+  // a provider outage is the endpoint's problem and already lives in health.mjs,
+  // so counting it here would punish a good model for a bad afternoon.
+  if (isRateable(job)) {
+    if (job.state === "done" && claimedUnrunVerification(job, job.toolSummary)) {
+      noteOutcome(job, "fake-verify", {
+        note: `claimed "${job.verify}" passed without ever opening a shell` });
+    } else if (job.state === "failed" || job.state === "timeout") {
+      const v = classifyFailure(job, ev);
+      if (v.category !== "provider") {
+        noteOutcome(job, "failed", { note: truncate(`${v.category}: ${v.reason ?? job.error ?? ""}`, 160, "…") });
+      }
+    }
+  }
   return saveJob(job);
 }
 
@@ -736,6 +756,7 @@ export async function cancel(id) {
 export async function forget(jobId, { force = false } = {}) {
   const job = readJob(jobId);
   if (!job) return { error: `unknown job ${jobId}` };
+  noteDiscardedIfUnused(job);
   if (job.state === "running") {
     if (!force) return { error: `job ${jobId} is still running`, hint: "cancel it first, or pass force" };
     await cancel(jobId);
@@ -750,9 +771,59 @@ export async function forget(jobId, { force = false } = {}) {
   return { ok: true, jobId, removedWorktree };
 }
 
+/**
+ * A finished job that was never applied and is now being thrown away. Weak
+ * evidence on purpose — plans change, a job can be abandoned for reasons that
+ * have nothing to do with the diff — but a worker whose work is *never* kept is
+ * telling you something.
+ */
+export function noteDiscardedIfUnused(job) {
+  if (!job || job.appliedAt || job.state !== "done") return null;
+  return noteOutcome(job, "discarded", { note: "finished but never applied" });
+}
+
+/** Remember that this job's work was landed, and by which route. */
+export function markApplied(job, mode) {
+  const fresh = readJob(job.id) ?? job;
+  fresh.appliedAt = new Date().toISOString();
+  fresh.appliedMode = mode;
+  saveJob(fresh);
+  noteOutcome(fresh, "applied", { note: `landed via ${mode}` });
+  return fresh;
+}
+
+const RATING_OUTCOME = { good: 1, mixed: 0.5, bad: 0 };
+
+/**
+ * The manager's verdict after reading the diff. Rating the same job again
+ * replaces the earlier one rather than adding to it — a correction is not a
+ * second opinion, and counting both would let one job vote twice.
+ */
+export function rate(job, { outcome, why, issue }) {
+  if (!(outcome in RATING_OUTCOME)) return { error: `outcome must be one of ${Object.keys(RATING_OUTCOME).join(", ")}` };
+  const fresh = readJob(job.id) ?? job;
+  const previous = fresh.rating ?? null;
+  const note = truncate([issue && issue !== "none" ? `[${issue}]` : "", (why ?? "").trim()]
+    .filter(Boolean).join(" "), 200, "…");
+  fresh.rating = { outcome, why: note || undefined, issue: issue ?? undefined, at: new Date().toISOString() };
+  saveJob(fresh);
+  noteOutcome(fresh, "rated", { outcome: RATING_OUTCOME[outcome], weight: WEIGHTS.rated, note: note || undefined });
+
+  const st = statsFor(fresh.model, fresh.profile ?? null);
+  return {
+    ok: true, jobId: fresh.id, model: fresh.model, outcome,
+    replaced: previous ? `previous rating "${previous.outcome}" was replaced` : undefined,
+    modelNow: `${st.n} rated jobs, ${st.rate == null ? "no rate yet" : Math.round(st.rate * 100) + "% good"}`
+  };
+}
+
 /** Continue a finished job in the same session and the same worktree. */
 export async function followup(id, message, opts = {}) {
   const job = await refresh(id);
+  // A job that needed a second round did not finish the first one. Weak evidence
+  // on purpose: a follow-up is often the manager changing their mind, not the
+  // worker failing.
+  if (job && isRateable(job)) noteOutcome(job, "followup", { note: truncate(message ?? "", 120, "…") });
   if (!job) return { error: `unknown job ${id}` };
   if (job.state === "running") return { error: "job is still running — wait or cancel it first" };
   if (!job.sessionId) return { error: "no session id recorded for this job (worker never started?)" };

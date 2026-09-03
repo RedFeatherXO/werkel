@@ -39,7 +39,16 @@ export const DEFAULTS = {
     // Within a profile, try the better model first — scored against today's
     // catalogue, not the order the list happened to be written in. Set false to
     // have the config order respected literally.
-    rankCandidates: true
+    rankCandidates: true,
+    // How far what happened here may move a model away from its published
+    // benchmark score, in score points. Twenty jobs on your repo are real
+    // evidence but they are not a benchmark, so this stays small. 0 = ignore
+    // experience entirely and rank on published benchmarks alone.
+    experienceMaxShift: 10,
+    // Sample the nudge from the posterior instead of taking its mean, so a model
+    // that had early bad luck keeps getting occasional chances instead of being
+    // frozen out of a profile forever. false makes the ranking deterministic.
+    experienceExploration: true
   },
 
   budget: {

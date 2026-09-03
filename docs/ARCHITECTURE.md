@@ -49,6 +49,49 @@ fleet_result / fleet_diff → review → fleet_apply → fleet_cleanup
 
 ## Design decisions, and the surprises behind them
 
+**The strongest verdict on a worker was an action nobody recorded.**
+`fleet_apply` merged a branch and wrote nothing back to the job, so five minutes
+later an accepted diff and an abandoned one looked identical on disk. That is
+revealed preference — somebody read the diff and let it into their code — and it
+was more valuable than any rating, so `src/outcome.mjs` now captures it, along
+with follow-ups, non-provider failures, and reports that claim a verification the
+tool log shows never ran.
+
+What it refuses to count matters more than what it counts. A 503 says the endpoint
+was down, not that the model writes bad code (that is `health.mjs`). A read-only or
+in-place job produces no diff, so "never applied" says nothing about it. A cancelled
+job says nothing either way. Every outcome is tagged `kind#jobId`, which makes it
+idempotent — calling apply twice cannot make one job vote twice — and replaceable,
+which is how a manager corrects a verdict that turned out wrong.
+
+`src/experience.mjs` turns those events into a bounded nudge on the benchmark score,
+built around three traps. Volume bias: decayed rates, never raw counts, so the
+most-used model cannot win by being used most. Small samples: a bare rate would let
+one lucky job beat 170 of 200, so the Beta prior and `confidence = n/(n+8)` scale
+the nudge by how much evidence exists — zero evidence moves a model exactly zero.
+Frozen rankings: the nudge is a Thompson sample, not a point estimate, so early bad
+luck does not exile a model from its profile forever. Measured: 1 good job is worth
++0.4 points, 20 good jobs +6.5, 500 good jobs +9.5 against a ceiling of 10.
+
+There is no stored rating anywhere, which is the point: `bonusFor` recomputes from
+the whole decayed history on every call, so nothing ratchets. A model that was good
+and turned bad falls immediately, rather than being slowly argued down from a saved
+number the way an Elo rating would be.
+
+Decay happens twice, in days **and** in jobs, and the second was missing at first.
+Time decay alone is an all-time average wearing a moving average's clothes: at twenty
+jobs a day, a 45-day half-life is nine hundred jobs, so everything inside a week
+weighs the same. Measured on that version, a model with two hundred good jobs behind
+it could fail forty in a row and still score +5.7. Weight now also halves every
+thirty jobs counting back from the newest, and the same run lands at −1.8. A side
+effect worth having: evidence saturates around 44 effective jobs, so confidence tops
+out near 84% and no history is ever unassailable.
+
+Selection bias is the one that cannot be removed without randomised assignment, so
+it is contained instead: models are only ever compared inside a profile, because a
+profile is roughly a difficulty class. `strong` sees only the hard jobs, and ranking
+it against `cheap` would measure task difficulty rather than model quality.
+
 **A model ranking that runs once is not a ranking, it is a snapshot.**
 The scoring existed only inside `ocfleet suggest`, a command run by hand — so a
 candidate list written in August stayed in force indefinitely while new models
