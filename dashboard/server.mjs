@@ -18,7 +18,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // Configuration is resolved per start(), not at import time, so the same server
 // can be embedded in `ocfleet dashboard` and run standalone in a container.
-let PORT, HOST, DATA_DIR, STATE_FILE, INGEST_TOKEN, USER, PASS, RETENTION;
+let PORT, HOST, DATA_DIR, STATE_FILE, INGEST_TOKEN, USER, PASS, RETENTION, REPORT_SELF_SEC;
 let state = { jobs: {}, commands: {}, hosts: {}, forgotten: {}, models: {} };
 
 function configure(opts = {}) {
@@ -30,6 +30,10 @@ function configure(opts = {}) {
   USER = opts.user ?? process.env.DASHBOARD_USER ?? "";
   PASS = opts.pass ?? process.env.DASHBOARD_PASS ?? "";
   RETENTION = Number(opts.retention ?? process.env.RETENTION_JOBS ?? 300);
+  // Report on this machine's own jobs from inside the server, so running the
+  // dashboard where the jobs are is one command instead of two processes that
+  // have to be started, stopped and remembered separately.
+  REPORT_SELF_SEC = Number(opts.reportSelfSec ?? process.env.REPORT_SELF_SEC ?? 0);
   fs.mkdirSync(DATA_DIR, { recursive: true });
   state = loadState();
 }
@@ -365,7 +369,28 @@ export async function start(opts = {}) {
     server.listen(PORT, HOST, resolve);
   });
 
+  const url = `http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}`;
+
+  // The reporter, in-process. It talks to this server over HTTP like any other
+  // reporter would, rather than reaching into the state directly — one code path
+  // stays one code path, and the remote case keeps working exactly as before.
+  let reportTimer = null, reporting = false;
+  if (REPORT_SELF_SEC > 0) {
+    const { report } = await import("../src/reporter.mjs");
+    const tick = async () => {
+      if (reporting) return;                 // a slow push must not stack up behind itself
+      reporting = true;
+      try { await report({ to: url, token: INGEST_TOKEN, once: true }); }
+      catch (e) { console.error("self-report failed:", e.message); }
+      finally { reporting = false; }
+    };
+    await tick().catch(() => {});
+    reportTimer = setInterval(tick, Math.max(1, REPORT_SELF_SEC) * 1000);
+    reportTimer.unref?.();
+  }
+
   const close = () => new Promise((resolve) => {
+    if (reportTimer) clearInterval(reportTimer);
     saveNow();
     for (const c of clients) { try { c.end(); } catch {} }
     clients.clear();
@@ -374,11 +399,12 @@ export async function start(opts = {}) {
   });
 
   return {
-    url: `http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}`,
+    url,
     host: HOST, port: PORT, stateFile: STATE_FILE,
     restoredJobs: Object.keys(state.jobs).length,
     ingestProtected: !!INGEST_TOKEN,
     loginRequired: !!(USER && PASS),
+    reportingSelf: REPORT_SELF_SEC > 0 ? REPORT_SELF_SEC : false,
     server, close
   };
 }
@@ -386,9 +412,17 @@ export async function start(opts = {}) {
 // standalone (docker, systemd, `node dashboard/server.mjs`)
 const runDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (runDirectly) {
+  // Self-reporting is opt-in, not inferred from a fleet home being present. This
+  // server usually runs on a machine where the jobs are NOT — that is the whole
+  // point of the push design — and a server that quietly started reporting
+  // someone else's leftover state would be a surprise. On the machine with the
+  // jobs, `ocfleet dashboard` is the one command that does both.
   const info = await start();
   console.log(`fleet dashboard on ${info.url}`);
   console.log(`  data     ${info.stateFile} (${info.restoredJobs} jobs restored)`);
+  console.log(`  source   ${info.reportingSelf
+    ? `this machine, every ${info.reportingSelf}s (REPORT_SELF_SEC=0 to turn off)`
+    : "remote reporters only — run `ocfleet report --to <url>` where the jobs are"}`);
   console.log(`  ingest   ${info.ingestProtected ? "token required" : "OPEN - set FLEET_INGEST_TOKEN so only your machine can push"}`);
   console.log(`  viewing  ${info.loginRequired ? `basic auth as "${USER}"` : "no login (set DASHBOARD_USER and DASHBOARD_PASS to require one)"}`);
 

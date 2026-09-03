@@ -70,6 +70,11 @@ try {
   ok("nothing was injected", !after.jobs.some((x) => x.jobId === "fake"));
 
   ok("prints the url for the user", /http:\/\/127\.0\.0\.1:7796/.test(out), out.match(/dashboard\s+(\S+)/)?.[1] ?? "");
+  // Somebody who starts this and then also runs `ocfleet report` at it gets a 401,
+  // because this command mints its own private token — so it has to say, right
+  // here, that no second command is wanted.
+  ok("says it is already reporting, so nobody starts a second reporter",
+     /no second command/i.test(out), out.split("\n").find((l) => /source/.test(l))?.trim() ?? "");
 } finally {
   cli.kill("SIGINT");
   await new Promise((r) => setTimeout(r, 800));

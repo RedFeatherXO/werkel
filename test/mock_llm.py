@@ -62,11 +62,23 @@ class H(BaseHTTPRequestHandler):
                 # truncated to keep the log readable, and `tools` sits behind a
                 # multi-kilobyte system prompt, so logging the body alone would
                 # silently drop exactly the field a permission test needs.
+                # The last user message identifies which job a request belongs to.
+                # A time window does not: a worker from an earlier job can still be
+                # talking while the next one starts, and its tool list would then be
+                # counted against the wrong job.
+                msgs = req.get("messages") or []
+                last_user = ""
+                for m in reversed(msgs):
+                    if m.get("role") == "user":
+                        c = m.get("content")
+                        last_user = c if isinstance(c, str) else json.dumps(c)
+                        break
                 entry = {
                     "path": self.path,
                     "model": req.get("model"),
                     "tools": [t.get("function", {}).get("name") for t in (req.get("tools") or [])],
-                    "body": json.dumps(req)[:4000],
+                    "user": last_user[:400],
+                    "body": json.dumps(req)[:2000],
                 }
                 with open(LOG, "a") as f:
                     f.write(json.dumps(entry) + "\n")

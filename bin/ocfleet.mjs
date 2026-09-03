@@ -410,7 +410,7 @@ const cmds = {
 
     p(`\n  dashboard  ${info.url}`);
     p(`  data       ${info.stateFile}${info.restoredJobs ? ` (${info.restoredJobs} jobs restored)` : ""}`);
-    p(`  source     this machine, refreshed every ${intervalSec}s`);
+    p(`  source     this machine, refreshed every ${intervalSec}s — no second command, this already reports`);
     if (host !== "127.0.0.1" && host !== "localhost") p(`  ${SYM.warn} listening on ${host} — reachable from your network, without a login`);
     p(`\n  press Ctrl+C to stop\n`);
 

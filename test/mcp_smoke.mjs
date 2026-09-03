@@ -323,46 +323,47 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
 // check what opencode ends up offering the model, not what we hoped it would.
 {
   const fs2 = await import("node:fs");
-  const toolsOfferedSince = (mark) => {
+  // Select by a marker in the prompt, not by a time window: a worker from an
+  // earlier job can still be talking when the next one starts, and its tool list
+  // would then be counted against the wrong job. That is exactly the flake this
+  // replaces — the readOnly assertions failed once with `write` and `edit` in the
+  // set, from a job that had every right to them.
+  const toolsOfferedFor = (marker) => {
     let lines = [];
-    try { lines = fs2.readFileSync(MOCK_REQUESTS, "utf8").trim().split("\n").slice(mark); } catch {}
+    try { lines = fs2.readFileSync(MOCK_REQUESTS, "utf8").trim().split("\n"); } catch {}
     const names = new Set();
-    let parsed = 0;
+    let matched = 0;
     for (const l of lines) {
       let e; try { e = JSON.parse(l); } catch { continue; }
-      parsed++;
+      if (!String(e.user ?? "").includes(marker)) continue;
+      matched++;
       for (const n of e.tools ?? []) if (n) names.add(n);
     }
-    // An empty set because nothing was logged would make every "tool X is absent"
+    // An empty set because nothing matched would make every "tool X is absent"
     // assertion pass for the wrong reason. Say so instead.
-    if (!parsed) return null;
+    if (!matched) return null;
     return names;
   };
-  const lineCount = () => {
-    try { return fs2.readFileSync(MOCK_REQUESTS, "utf8").trim().split("\n").length; } catch { return 0; }
-  };
 
-  const mark1 = lineCount();
   const ro = await call("fleet_delegate", {
-    task: "Read src/a.js and describe what it exports. Change nothing.",
+    task: "MARKER-RO-NOBASH: read src/a.js and describe what it exports. Change nothing.",
     repo: REPO, model: "mock/mock-coder", title: "ro-nobash",
     readOnly: true, worktree: false, timeoutSec: 120
   });
   await call("fleet_wait", { jobIds: [ro.jobId], timeoutSec: 60 });
-  const t1 = toolsOfferedSince(mark1);
+  const t1 = toolsOfferedFor("MARKER-RO-NOBASH");
   ok("readOnly denies bash, not merely asks", t1 && !t1.has("bash"), t1 ? [...t1].join(",") : "NO REQUESTS LOGGED");
   ok("readOnly denies writing too", t1 && !t1.has("write") && !t1.has("edit"), t1 ? [...t1].join(",") : "NO REQUESTS LOGGED");
   ok("readOnly says so out loud when there is no worktree",
      (ro.notices ?? []).some((n) => /no worktree/.test(n)), (ro.notices ?? []).join(" | ") || "(no notices)");
 
-  const mark2 = lineCount();
   const rb = await call("fleet_delegate", {
-    task: "Read src/a.js and report what it exports.",
+    task: "MARKER-RO-BASH: read src/a.js and report what it exports.",
     repo: REPO, model: "mock/mock-coder", title: "ro-bash",
     readOnly: true, verify: "echo verified", worktree: false, timeoutSec: 120
   });
   await call("fleet_wait", { jobIds: [rb.jobId], timeoutSec: 60 });
-  const t2 = toolsOfferedSince(mark2);
+  const t2 = toolsOfferedFor("MARKER-RO-BASH");
   ok("a verify command brings bash back", !!t2?.has("bash"), t2 ? [...t2].join(",") : "NO REQUESTS LOGGED");
   ok("but still no way to write a file", t2 && !t2.has("write") && !t2.has("edit"), t2 ? [...t2].join(",") : "NO REQUESTS LOGGED");
   ok("and the escalation is reported, not silent",

@@ -18,6 +18,10 @@
        pair ΔE 21.6 under protanopia). The sign is always printed too, so the colour
        never carries the meaning on its own. */
     --pos: #2a78d6; --neg: #e34948; --mid: #f0efec;
+    /* Petrol, two steps of one hue — a ranking is magnitude, and magnitude wants a
+       sequential ramp, not two competing colours. Both clear 3:1 on this surface.
+       The lighter step marks the part of a score the fleet earned itself. */
+    --rank: #0f7a72; --rank-soft: #2d9c90; --rank-tint: #0f7a720d;
     --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
   }
   @media (prefers-color-scheme: dark) {
@@ -25,6 +29,7 @@
       --bg: #0e1013; --panel: #161a1f; --line: #262b33; --ink: #e8eaed; --muted: #9aa3af;
       --running: #60a5fa; --done: #4ade80; --failed: #f87171; --timeout: #fbbf24; --cancelled: #9ca3af; --queued: #a78bfa;
       --pos: #3987e5; --neg: #e66767; --mid: #383835;
+      --rank: #279189; --rank-soft: #37a89c; --rank-tint: #27918914;
       --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
     }
   }
@@ -67,34 +72,42 @@
   table.models { border-collapse: collapse; width: 100%; font-size: 13px; }
   table.models th {
     text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase;
-    color: var(--muted); padding: 11px 14px; border-bottom: 1px solid var(--line); white-space: nowrap;
+    color: var(--muted); padding: 11px 14px 10px; border-bottom: 1px solid var(--line); white-space: nowrap;
   }
-  table.models td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  table.models tr:last-child td { border-bottom: 0; }
+  table.models td { padding: 9px 14px; vertical-align: middle; }
+  /* Alternating rows instead of a line under each one: with thirty-odd models the
+     eye needs to track a row across, and a tinted band does that better than a rule. */
+  table.models tbody tr:nth-child(even) { background: var(--rank-tint); }
   table.models .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  table.models .mdl { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-  table.models .prof { color: var(--muted); font-size: 12px; }
-  table.models .note { color: var(--muted); font-size: 12px; max-width: 380px; }
+  table.models .rank { color: var(--muted); width: 1%; padding-right: 4px; }
+  table.models .mdl { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; white-space: nowrap; }
+  table.models .note { color: var(--muted); font-size: 12px; max-width: 260px; }
+  table.models .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
 
-  /* Diverging bar: one baseline at the centre, marks growing left (negative) and
-     right (positive), 4px rounded at the data end and square at the baseline. */
-  .meter { display: flex; align-items: center; gap: 9px; }
-  .meter .track { position: relative; width: 108px; height: 9px; background: var(--mid); border-radius: 2px; flex: none; }
-  .meter .track::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line); }
-  .meter .fill { position: absolute; top: 0; bottom: 0; }
-  .meter .fill[data-sign="pos"] { left: 50%; background: var(--pos); border-radius: 0 4px 4px 0; }
-  .meter .fill[data-sign="neg"] { right: 50%; background: var(--neg); border-radius: 4px 0 0 4px; }
-  .meter b { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 42px; }
-
-  table.models .rank { color: var(--muted); width: 1%; }
-  table.models .tot b { font-weight: 650; }
-  table.models .est { color: var(--muted); }
-  table.models .z { color: var(--muted); opacity: .55; }
-  table.models .tags { display: inline-flex; gap: 4px; margin-left: 8px; }
-  table.models .tags i {
-    font-style: normal; font-size: 10.5px; padding: 1px 6px; border-radius: 999px;
-    border: 1px solid var(--line); color: var(--muted);
+  /* The headline number, and the bar that makes thirty of them comparable. */
+  .score { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .rankbar { display: block; position: relative; height: 10px; width: 100%; min-width: 150px; }
+  .rankbar .base, .rankbar .gain, .rankbar .loss {
+    position: absolute; top: 0; height: 10px;
   }
+  /* 4px rounded at the data end, square at the baseline. */
+  .rankbar .base { left: 0; background: var(--rank); border-radius: 0 4px 4px 0; }
+  .rankbar .gain { background: var(--rank-soft); border-radius: 0 4px 4px 0; }
+  /* What a model gave away: the outline of where its benchmark alone would have
+     put it, so a negative adjustment is visible instead of merely absent. */
+  .rankbar .loss {
+    border: 1.5px solid var(--neg); border-left: 0; border-radius: 0 4px 4px 0;
+    background: repeating-linear-gradient(135deg, transparent 0 3px, var(--neg) 3px 4px);
+    opacity: .85;
+  }
+  .rankbar .tick { position: absolute; top: -2px; height: 14px; width: 1px; background: var(--ink); opacity: .35; }
+
+  .score + .est { color: var(--muted); font-size: 13px; margin-left: 1px; }
+  .delta { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .delta.up { color: var(--rank); }
+  .delta.down { color: var(--neg); }
+  .delta.zero { color: var(--muted); opacity: .5; }
+
   #mnote { color: var(--muted); font-size: 12px; padding: 10px 2px 0; }
   .groups { display: flex; flex-direction: column; gap: 14px; }
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
@@ -500,46 +513,75 @@ function meter(bonus) {
 // round a real price to zero. Stripping trailing zeros produced "$0." for a free
 // model and mixed "$0.3" with "$2.50" in the same cell.
 const money = (v) => v == null ? "?" : v === 0 ? "0" : v < 0.1 ? v.toFixed(3) : v.toFixed(2);
-const fmtPrice = (p, c) => p == null ? "–" : (p === 0 && c === 0) ? "frei" : `$${money(p)} / $${money(c)}`;
-const fmtCtx = (n) => n == null ? "–" : n >= 1e6 ? (n / 1e6).toFixed(1).replace(".0", "") + "M" : Math.round(n / 1000) + "k";
+const fmtPrice = (p, c) => p == null ? "" : (p === 0 && c === 0) ? "frei" : `$${money(p)}/$${money(c)}`;
+const fmtCtx = (n) => n == null ? "" : n >= 1e6 ? (n / 1e6).toFixed(1).replace(".0", "") + "M" : Math.round(n / 1000) + "k";
+
+/** One bar per model: length is the total, a tick marks where the benchmark alone
+ *  put it, and the piece between them is what this fleet's own record added or cost. */
+function rankbar(r, max) {
+  const pct = (v) => Math.max(0, Math.min(100, (v / max) * 100));
+  const base = r.base ?? 0, total = r.total ?? base;
+  const lo = Math.min(base, total), hi = Math.max(base, total);
+  const gain = total > base
+    // 2px of surface between the two segments, so they read as two things
+    ? `<span class="gain" style="left:calc(${pct(lo)}% + 2px);width:calc(${pct(hi) - pct(lo)}% - 2px)"></span>`
+    : "";
+  const loss = total < base
+    ? `<span class="loss" style="left:calc(${pct(lo)}% + 2px);width:calc(${pct(hi) - pct(lo)}% - 2px)"></span>`
+    : "";
+  return `<span class="rankbar">
+    <span class="base" style="width:${pct(lo)}%"></span>${gain}${loss}
+    <span class="tick" style="left:${pct(base)}%"></span>
+  </span>`;
+}
 
 function renderModels() {
   const t = $("mtable");
   if (!models.length) {
     t.innerHTML = "";
     $("mempty").hidden = false;
-    $("mempty").innerHTML = "Keine Modelle gemeldet. Der Reporter schickt die Rangliste alle zehn Minuten mit — " +
-      "läuft er schon? <code>ocfleet report --to " + esc(location.origin) + "</code>";
+    $("mempty").innerHTML = "Keine Modelle gemeldet. Läuft der Reporter? Auf dem Rechner mit den Jobs " +
+      "genügt <code>ocfleet dashboard</code> — der meldet sich selbst.";
     return;
   }
   $("mempty").hidden = true;
+  const max = Math.max(...models.map((r) => Math.max(r.total ?? 0, r.base ?? 0)), 1);
+
   const row = (r, i) => {
     const note = (r.notes ?? []).map((n) => n.note).filter(Boolean)[0];
     const est = r.capabilitySource !== "artificial-analysis";
+    const d = r.experience ?? 0;
+    const delta = Math.abs(d) < 0.05
+      ? `<span class="delta zero">±0</span>`
+      : `<span class="delta ${d > 0 ? "up" : "down"}">${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(1)}</span>`;
+    const meta = [fmtPrice(r.prompt, r.completion), fmtCtx(r.context),
+      r.jobs ? `${r.jobs} Jobs` : ""].filter(Boolean).join("  ·  ");
     return `<tr>
       <td class="num rank">${i + 1}</td>
-      <td class="mdl">${esc(r.model)}${r.profiles?.length ? `<span class="tags">${r.profiles.map((p) => `<i>${esc(p)}</i>`).join("")}</span>` : ""}</td>
-      <td class="num">${fmtPrice(r.prompt, r.completion)}</td>
-      <td class="num">${fmtCtx(r.context)}</td>
-      <td class="num${est ? " est" : ""}" title="${est ? "aus dem Namen geschätzt — kein veröffentlichter Benchmark" : "Artificial Analysis"}">${r.base?.toFixed(1) ?? "–"}${est ? "~" : ""}</td>
-      <td>${meter(r.experience)}</td>
-      <td class="num tot"><b>${r.total?.toFixed(1) ?? "–"}</b></td>
-      <td class="num">${r.jobs ? r.jobs : "<span class=\"z\">0</span>"}</td>
+      <td>
+        <div class="mdl">${esc(r.model)}</div>
+        <div class="sub">${esc(meta)}${r.profiles?.length ? "  ·  " + esc(r.profiles.join(", ")) : ""}</div>
+      </td>
+      <td class="num"><span class="score">${(r.total ?? 0).toFixed(1)}</span>${est
+        ? `<span class="est" title="kein veröffentlichter Benchmark — aus dem Namen geschätzt">~</span>` : ""}</td>
+      <td style="width:32%">${rankbar(r, max)}</td>
+      <td class="num" title="Basis ${(r.base ?? 0).toFixed(1)}${est ? " (aus dem Namen geschätzt)" : ""}">${delta}</td>
       <td class="note">${note ? esc(note) : ""}</td>
     </tr>`;
   };
-  const used = models.filter((r) => r.jobs > 0).length;
+
   t.innerHTML = `<thead><tr>
       <th class="num">#</th><th>Modell</th>
-      <th class="num" title="Preis pro 1M Token, rein / raus">Preis</th>
-      <th class="num">Kontext</th>
-      <th class="num" title="Aus veröffentlichten Benchmarks — steht fest, bevor je ein Job lief">Basis</th>
-      <th title="Was diese Flotte gelernt hat. Startet bei 0 und verschiebt sich erst beim Verwenden.">Erfahrung</th>
-      <th class="num">Gesamt</th>
-      <th class="num">Jobs</th>
+      <th class="num" title="Basis-Score plus das, was diese Flotte gelernt hat">Gesamt</th>
+      <th>Rangfolge <span style="text-transform:none;letter-spacing:0;font-weight:400">— Strich = Benchmark allein</span></th>
+      <th class="num" title="Verschiebung durch eigene Erfahrung. Startet bei 0.">Erfahrung</th>
       <th>Zuletzt aufgefallen</th>
     </tr></thead><tbody>${models.map(row).join("")}</tbody>`;
-  $("mnote").textContent = `${models.length} routbare Modelle · ${used} davon mit Erfahrung`;
+
+  const used = models.filter((r) => r.jobs > 0).length;
+  $("mnote").textContent = used
+    ? `${models.length} routbare Modelle · ${used} davon mit eigener Erfahrung`
+    : `${models.length} routbare Modelle · noch keine eigene Erfahrung — sie entsteht, sobald du einen Diff übernimmst oder fleet_rate benutzt`;
 }
 
 function setTab(name) {

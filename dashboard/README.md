@@ -40,7 +40,21 @@ is shared — it is the same catalogue everywhere — while experience is added 
 weighted by evidence, never averaged: a laptop with ten jobs does not get the same
 say as a desktop with three hundred.
 
-`ocfleet board` prints the same table in a terminal.
+`ocfleet board` prints the same ranking in a terminal.
+
+### One command, or two
+
+On the machine where the jobs run, `ocfleet dashboard` is everything: it starts
+the server **and** reports on this machine's jobs from inside the same process.
+Do not also start `ocfleet report` against it — that command mints a private
+ingest token for itself, so a second reporter gets a 401 for something it did not
+need to do.
+
+For a dashboard on a different machine, the push design is the point: that server
+runs on its own and the reporters come to it. Should you ever want a standalone
+`node dashboard/server.mjs` to report on its own machine as well, set
+`REPORT_SELF_SEC=5`. It is off unless asked, because this server normally runs
+where the jobs are not.
 
 ## Just want to look at your own machine?## Just want to look at your own machine?
 
