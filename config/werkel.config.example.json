@@ -1,5 +1,5 @@
 {
-  "_readme": "Copy to ~/.opencode-fleet/fleet.config.json (global) or <repo>/.opencode-fleet.json (per project). All prices are USD per 1,000,000 tokens.",
+  "_readme": "Copy to ~/.werkel/werkel.config.json (global) or <repo>/.werkel.json (per project). All prices are USD per 1,000,000 tokens.",
 
   "defaults": {
     "profile": "balanced",
@@ -11,7 +11,7 @@
   },
 
   "budget": {
-    "_comment": "The guard every delegation passes. Lower the two ceilings to make the fleet cheaper; raise maxDailyUsd carefully.",
+    "_comment": "The guard every delegation passes. Lower the two ceilings to make werkel cheaper; raise maxDailyUsd carefully.",
     "maxPromptUsdPerMTok": 1.5,
     "maxCompletionUsdPerMTok": 5.0,
     "maxJobUsd": 0.75,
@@ -23,7 +23,7 @@
     "deny": ["*gpt-5*", "*claude*", "*gemini*-pro*", "*opus*"]
   },
 
-  "_profiles_hint": "`ocfleet suggest --write` regenerates these from the providers you are authenticated for.",
+  "_profiles_hint": "`werkel suggest --write` regenerates these from the providers you are authenticated for.",
   "profiles": {
     "free": {
       "description": "Free models — bulk work at zero cost",
@@ -80,7 +80,7 @@
   },
 
   "worktree": {
-    "root": "~/.opencode-fleet/worktrees",
-    "branchPrefix": "fleet/"
+    "root": "~/.werkel/worktrees",
+    "branchPrefix": "werkel/"
   }
 }

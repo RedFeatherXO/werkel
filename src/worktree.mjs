@@ -53,7 +53,7 @@ export async function commitAll(dir, message) {
   if (!st.ok) return { committed: false, error: st.stderr };
   if (!st.stdout.trim()) return { committed: false, empty: true };
   await git(dir, ["add", "-A"]);
-  const c = await git(dir, ["-c", "user.name=opencode-fleet", "-c", "user.email=fleet@localhost",
+  const c = await git(dir, ["-c", "user.name=werkel", "-c", "user.email=werkel@localhost",
     "commit", "-m", message, "--no-verify"]);
   if (!c.ok) return { committed: false, error: truncate(c.stderr || c.error, 400) };
   const sha = (await git(dir, ["rev-parse", "HEAD"])).stdout.trim();
@@ -97,7 +97,7 @@ export async function applyJob(job, { mode = "merge", target = null, message = n
     if (!co.ok) return { ok: false, error: `checkout ${target} failed: ${truncate(co.stderr, 300)}` };
   }
   const onto = target || back;
-  const msg = message || `fleet: ${job.title || job.id} (${job.model})`;
+  const msg = message || `werkel: ${job.title || job.id} (${job.model})`;
 
   if (mode === "patch") {
     const range = `${wt.baseSha}..${wt.branch}`;
@@ -115,7 +115,7 @@ export async function applyJob(job, { mode = "merge", target = null, message = n
       hint: "resolve manually, or use mode:'patch' to get a .patch file" };
   }
   if (mode === "squash") {
-    const c = await git(repo, ["-c", "user.name=opencode-fleet", "-c", "user.email=fleet@localhost", "commit", "-m", msg, "--no-verify"]);
+    const c = await git(repo, ["-c", "user.name=werkel", "-c", "user.email=werkel@localhost", "commit", "-m", msg, "--no-verify"]);
     if (!c.ok) return { ok: false, error: truncate(c.stderr, 400) };
   }
   return { ok: true, mode, branch: wt.branch, onto, sha: (await git(repo, ["rev-parse", "HEAD"])).stdout.trim() };
@@ -134,7 +134,7 @@ export async function removeWorktree(job, { deleteBranch = true, force = false }
   return { ok: true, removed: wt.path, branchDeleted: deleteBranch ? wt.branch : null };
 }
 
-export async function listFleetBranches(repo) {
-  const r = await git(repo, ["branch", "--list", "fleet/*", "--format=%(refname:short)"]);
+export async function listWorkerBranches(repo) {
+  const r = await git(repo, ["branch", "--list", "werkel/*", "--format=%(refname:short)"]);
   return r.ok ? r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : [];
 }

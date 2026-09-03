@@ -27,7 +27,7 @@ export async function openrouterCatalog({ refresh = false, ttlHours = 24 } = {})
     if (cached && cached._schema === CATALOG_SCHEMA) return cached.models;
   }
   try {
-    const res = await fetch(OR_URL, { headers: { "user-agent": "opencode-fleet" } });
+    const res = await fetch(OR_URL, { headers: { "user-agent": "werkel" } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     const out = {};
@@ -76,7 +76,7 @@ export async function installedModels({ bin, cwd = process.cwd(), refresh = fals
   if (!r.ok && !r.stdout) return readJson(file, []);
   const list = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter((s) => s && s.includes("/") && !s.startsWith("#"));
   // `opencode models` can return a short partial list while it is still fetching
-  // its catalogue — caching that would silently shrink the fleet for an hour.
+  // its catalogue — caching that would silently shrink werkel for an hour.
   if (list.length >= 5) writeJson(file, list);
   return list.length ? list : readJson(file, []);
 }
@@ -216,7 +216,7 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
   if (!prof) return { error: `unknown profile "${name}". Known: ${Object.keys(cfg.profiles ?? {}).join(", ")}`, rejected };
 
   // A model that just failed on us is tried last, not first. Free endpoints in
-  // particular drop out for minutes at a time; the fleet should not rediscover
+  // particular drop out for minutes at a time; werkel should not rediscover
   // that on every single job.
   const health = loadHealth();
   const cooldownMin = cfg.defaults?.modelCooldownMin ?? 30;
@@ -276,13 +276,13 @@ export async function resolveModel({ model, profile }, cfg, { bin, cwd, orCatalo
     return {
       model: cand, price: chk.info, why: `profile "${name}" (fallback)`,
       order: ordered,
-      warning: `no candidate of profile "${name}" appears in \`opencode models\` — trying ${cand} anyway. Run \`ocfleet doctor\` if it fails.`
+      warning: `no candidate of profile "${name}" appears in \`opencode models\` — trying ${cand} anyway. Run \`werkel doctor\` if it fails.`
     };
   }
   return {
     error: `no candidate of profile "${name}" is usable`,
     rejected,
-    hint: "run `ocfleet doctor` — usually the provider is not authenticated (`opencode auth login`), the model id changed, or the budget limits are too tight"
+    hint: "run `werkel doctor` — usually the provider is not authenticated (`opencode auth login`), the model id changed, or the budget limits are too tight"
   };
 }
 
@@ -416,7 +416,7 @@ const UNSTABLE_ID = /^~|:(batch|extended|thinking)$|latest$/i;
 /**
  * What the model is worth per dollar. Benchmarks first — Artificial Analysis
  * publishes a coding and an agentic index through the OpenRouter catalogue, and
- * a fleet worker needs both: write the code, then drive the tools. Only models
+ * werkel worker needs both: write the code, then drive the tools. Only models
  * without published numbers fall back to reading the name.
  */
 export function capabilityOf(ref, info) {
@@ -503,11 +503,11 @@ export async function refreshProfilesIfStale(cfg, { cwd, bin, force = false, now
   // No stamp means these profiles were not written by this mechanism — they were
   // hand-written, or predate it. Silently replacing someone's own candidate list
   // on the first delegation is not a refresh, it is losing their work. Running
-  // `ocfleet suggest --write` once stamps the file and opts in.
+  // `werkel suggest --write` once stamps the file and opts in.
   if (!writtenAt && !force) return null;
   if (!force && now - writtenAt < maxAgeDays * 86400e3) return null;
 
-  const target = path.join(ensureDir(stateDir()), "fleet.config.json");
+  const target = path.join(ensureDir(stateDir()), "werkel.config.json");
   // Never invent a config file the user never had: an auto-refresh may update
   // what is there, not decide that there should be one.
   if (!fs.existsSync(target)) return null;

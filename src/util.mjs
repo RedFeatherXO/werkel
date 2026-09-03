@@ -10,8 +10,43 @@ export function expandHome(p) {
   return p.startsWith("~") ? path.join(HOME, p.slice(1)) : p;
 }
 
+/**
+ * Where everything lives: jobs, config, spend, the health and experience ledgers.
+ *
+ * The project used to be called opencode-fleet. Anyone who has been running it has
+ * weeks of job records, a spend history and an experience ledger under the old
+ * name, and a rename that quietly started from an empty directory would look
+ * exactly like the tool losing their data. So the first call moves the old
+ * directory across, once, and says so.
+ *
+ * The old names are spelled out here deliberately: this is the one place in the
+ * codebase that still has to know them.
+ */
+const LEGACY_HOME_ENV = "OPENCODE" + "_FLEET_HOME_DIR";
+const LEGACY_DIR = "~/." + "opencode-fleet";
+const LEGACY_CONFIG = "fleet" + ".config.json";
+
+let migrated = false;
 export function stateDir() {
-  return expandHome(process.env.OPENCODE_FLEET_HOME || "~/.opencode-fleet");
+  const dir = expandHome(process.env.WERKEL_HOME || process.env[LEGACY_HOME_ENV] || "~/.werkel");
+  if (!migrated) {
+    migrated = true;
+    try { migrateStateDir(dir); } catch (e) { console.error(`could not migrate old state: ${e.message}`); }
+  }
+  return dir;
+}
+
+/** One-time move of the old state directory. Never overwrites an existing one. */
+function migrateStateDir(dir) {
+  if (fs.existsSync(dir)) return;
+  const old = expandHome(process.env[LEGACY_HOME_ENV] || LEGACY_DIR);
+  if (old === dir || !fs.existsSync(old)) return;
+  fs.renameSync(old, dir);
+  // The config file was named after the old project too.
+  const oldCfg = path.join(dir, LEGACY_CONFIG);
+  const newCfg = path.join(dir, "werkel.config.json");
+  if (fs.existsSync(oldCfg) && !fs.existsSync(newCfg)) fs.renameSync(oldCfg, newCfg);
+  console.error(`werkel: moved ${old} to ${dir} — jobs, config and history came along`);
 }
 
 export function ensureDir(p) {

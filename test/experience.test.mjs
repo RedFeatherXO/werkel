@@ -5,10 +5,10 @@ import { test, after } from "node:test";
 import { strict as assert } from "node:assert/strict";
 import { record, statsFor, bonusFor, summary, load, save, forget } from "../src/experience.mjs";
 
-// Everything below that touches disk writes into a throwaway fleet home, so
+// Everything below that touches disk writes into a throwaway werkel home, so
 // the tests never see (or leave) real experience data.
-const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-fleet-experience-"));
-process.env.OPENCODE_FLEET_HOME = HOME;
+const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "werkel-experience-"));
+process.env.WERKEL_HOME = HOME;
 const FILE = () => path.join(HOME, "experience.json");
 
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));

@@ -1,4 +1,4 @@
-# opencode-fleet installer - checks the toolchain, registers the MCP server, installs the skill.
+# werkel installer - checks the toolchain, registers the MCP server, installs the skill.
 # PowerShell counterpart to scripts/install.sh. Runs on Windows PowerShell 5.1 and PowerShell 7+.
 #
 # If execution policy blocks scripts, run it with:
@@ -12,9 +12,9 @@ $ErrorActionPreference = "Stop"
 $scriptDir = $PSScriptRoot
 if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $root = Split-Path -Parent $scriptDir
-$binOcfleet = Join-Path (Join-Path $root "bin") "ocfleet.mjs"
+$binOcfleet = Join-Path (Join-Path $root "bin") "werkel.mjs"
 $exampleConfig = Join-Path (Join-Path $root "config") "fleet.config.example.json"
-$skillSource = Join-Path (Join-Path $root "skills") "opencode-fleet"
+$skillSource = Join-Path (Join-Path $root "skills") "werkel"
 
 function Say([string]$msg) { Write-Host "  $msg" }
 
@@ -28,7 +28,7 @@ function Get-CliVersion([string]$name) {
 }
 
 Write-Host ""
-Write-Host "opencode-fleet setup"
+Write-Host "werkel setup"
 Write-Host ""
 
 # 1. node >= 18
@@ -78,11 +78,11 @@ if (-not (Get-Command opencode -ErrorAction SilentlyContinue)) {
 }
 Say "[ok] opencode $(Get-CliVersion opencode)"
 
-# 4. fleet config: $env:OPENCODE_FLEET_HOME, falling back to $HOME\.opencode-fleet
-$fleetHome = $env:OPENCODE_FLEET_HOME
-if ([string]::IsNullOrWhiteSpace($fleetHome)) { $fleetHome = Join-Path $HOME ".opencode-fleet" }
+# 4. werkel config: $env:WERKEL_HOME, falling back to $HOME\.werkel
+$fleetHome = $env:WERKEL_HOME
+if ([string]::IsNullOrWhiteSpace($fleetHome)) { $fleetHome = Join-Path $HOME ".werkel" }
 New-Item -ItemType Directory -Force -Path $fleetHome | Out-Null
-$fleetConfig = Join-Path $fleetHome "fleet.config.json"
+$fleetConfig = Join-Path $fleetHome "werkel.config.json"
 if (Test-Path $fleetConfig) {
   Say "[--] keeping existing $fleetConfig"
 } else {
@@ -99,27 +99,32 @@ if (Test-Path $fleetConfig) {
 #    prints the JSON block for the Claude desktop app
 & node $binOcfleet install --scope user
 if ($LASTEXITCODE -ne 0) {
-  Say "[!!] node bin\ocfleet.mjs install --scope user failed (exit code $LASTEXITCODE)"
+  Say "[!!] node bin\werkel.mjs install --scope user failed (exit code $LASTEXITCODE)"
   exit 1
 }
 
 # 6. manager skill into ~/.claude/skills (overwrite an existing copy)
 $skillsDir = Join-Path (Join-Path $HOME ".claude") "skills"
-$skillTarget = Join-Path $skillsDir "opencode-fleet"
+$skillTarget = Join-Path $skillsDir "werkel"
 try {
   New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
   if (Test-Path $skillTarget) { Remove-Item -Recurse -Force $skillTarget }
   Copy-Item -Recurse -Force -Path $skillSource -Destination $skillsDir
   Say "[ok] installed manager skill to $skillTarget"
 } catch {
-  Say "[--] could not install skill (copy skills\opencode-fleet to $skillsDir manually)"
+  Say "[--] could not install skill (copy skills\werkel to $skillsDir manually)"
 }
 
-# 7. next steps
+# 7. make `werkel` callable — the docs referred to it long before anything set it up
+Write-Host ""
+& node "$binOcfleet" link
+
+# 8. next steps
 Write-Host ""
 Say "next:"
 Say "  1. opencode auth login                              # openrouter / zai / deepseek / opencode zen"
-Say "  2. node `"$binOcfleet`" suggest --write       # profiles from the providers you have"
-Say "  3. node `"$binOcfleet`" doctor                # verify"
+Say "  2. werkel suggest --write                          # profiles from the providers you have"
+Say "  3. werkel doctor                                   # verify"
+Say "     (not on your PATH yet? use .\werkel from this folder)"
 Say "  4. ask Claude: ""delegate the failing parser tests to a cheap worker"""
 Write-Host ""

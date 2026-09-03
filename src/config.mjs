@@ -3,10 +3,10 @@ import path from "node:path";
 import { expandHome, stateDir, readJson, merge } from "./util.mjs";
 
 /**
- * Default fleet policy. Everything here can be overridden by
- *   ~/.opencode-fleet/fleet.config.json      (global)
- *   <repo>/.opencode-fleet.json              (per project, wins)
- *   OPENCODE_FLEET_CONFIG=<file>             (explicit, wins over both)
+ * Default policy. Everything here can be overridden by
+ *   ~/.werkel/werkel.config.json      (global)
+ *   <repo>/.werkel.json              (per project, wins)
+ *   WERKEL_CONFIG=<file>             (explicit, wins over both)
  *
  * All prices are USD per 1,000,000 tokens — the unit humans read on pricing pages.
  */
@@ -27,13 +27,13 @@ export const DEFAULTS = {
     maxAttempts: 3,         // hard cap on attempts per job, including the first
     agent: null,            // opencode agent name, e.g. "build" or a custom subagent
     variant: null,          // reasoning effort, e.g. "high" (provider specific)
-    // Housekeeping for ~/.opencode-fleet/jobs: once more finished records than
+    // Housekeeping for ~/.werkel/jobs: once more finished records than
     // this pile up, refreshAll() deletes the oldest ones. A job whose worktree
     // still exists holds unmerged work and is never pruned nor counted. 0 = unlimited.
     keepJobs: 200,
     // The model landscape moves faster than anyone remembers to re-run `suggest`.
     // Profiles older than this are re-ranked against the current catalogue on the
-    // next delegation, keeping the previous list as fleet.config.json.bak. Only
+    // next delegation, keeping the previous list as werkel.config.json.bak. Only
     // models the budget guard already allows can ever be proposed. 0 = never.
     profileMaxAgeDays: 7,
     // Within a profile, try the better model first — scored against today's
@@ -66,7 +66,7 @@ export const DEFAULTS = {
   // Ordered candidates. First one that exists in `opencode models` AND passes the
   // budget guard wins. Add your own; these are only sane starting points.
   // Ordered candidates. First one that is affordable and reachable wins.
-  // `ocfleet suggest --write` rewrites this from the providers you are actually
+  // `werkel suggest --write` rewrites this from the providers you are actually
   // authenticated for — much better than these generic defaults.
   profiles: {
     free: {
@@ -135,9 +135,9 @@ export const DEFAULTS = {
   },
 
   worktree: {
-    root: "~/.opencode-fleet/worktrees",
-    branchPrefix: "fleet/",
-    keepOnSuccess: true,   // keep until fleet_cleanup so the manager can inspect the diff
+    root: "~/.werkel/worktrees",
+    branchPrefix: "werkel/",
+    keepOnSuccess: true,   // keep until werkel_cleanup so the manager can inspect the diff
     keepOnFailure: true
   },
 
@@ -149,9 +149,9 @@ export const DEFAULTS = {
 };
 
 export function configPaths(repoDir) {
-  const list = [path.join(stateDir(), "fleet.config.json")];
-  if (repoDir) list.push(path.join(repoDir, ".opencode-fleet.json"));
-  if (process.env.OPENCODE_FLEET_CONFIG) list.push(expandHome(process.env.OPENCODE_FLEET_CONFIG));
+  const list = [path.join(stateDir(), "werkel.config.json")];
+  if (repoDir) list.push(path.join(repoDir, ".werkel.json"));
+  if (process.env.WERKEL_CONFIG) list.push(expandHome(process.env.WERKEL_CONFIG));
   return list;
 }
 

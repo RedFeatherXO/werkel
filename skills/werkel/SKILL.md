@@ -1,9 +1,9 @@
 ---
-name: opencode-fleet
+name: werkel
 description: Delegate coding work to OpenCode workers running cheap models while you stay the manager — plan, brief, review every diff, and land it. Use when a task is large, parallelizable, or mechanical enough that a cheaper model can execute it under supervision, or when the user asks to "delegate", "use opencode", "farm this out", "run workers", or to save tokens/cost on bulk changes.
 ---
 
-# Managing an OpenCode fleet
+# Managing OpenCode workers
 
 You are the manager. OpenCode workers on cheap models are the hands. You keep the
 plan, the repo knowledge and the judgement; they type. Their output is a proposal
@@ -48,26 +48,26 @@ Two things to know before you reach for it:
 
 ## The loop
 
-1. **`fleet_doctor`** once per session (or when a delegation fails). It tells you
+1. **`werkel_doctor`** once per session (or when a delegation fails). It tells you
    which profiles can route anywhere and what today's spend is.
 2. **Split the work** into jobs that do not touch the same files. Jobs run in
    separate git worktrees, so file-level independence is what keeps merges clean.
-3. **`fleet_delegate`** each job. Start them all before waiting on any — that is
+3. **`werkel_delegate`** each job. Start them all before waiting on any — that is
    where the wall-clock win comes from.
-4. **`fleet_wait`** on the batch. Poll in short calls (45s or less) rather than one
-   long wait — a bridge between you and the fleet may cap how long a single call can
+4. **`werkel_wait`** on the batch. Poll in short calls (45s or less) rather than one
+   long wait — a bridge between you and werkel may cap how long a single call can
    block (a desktop bridge typically cuts off at 60s, so waiting longer is not an
    option, only waiting more often). A reply of `{unchanged: true, stillRunning: [...]}`
    means literally nothing has happened since your last call: do not reason about it,
    do not report it to the user, just call again. A job that finished brings its
    report with it, so you usually skip straight to step 5's second half.
-5. **`fleet_result`** per job. It carries the report, the changed files and the
+5. **`werkel_result`** per job. It carries the report, the changed files and the
    diffstat — but **not** the patch, which runs to thousands of tokens. Call
-   **`fleet_diff`** when the report gives you a reason to look. The report is a
+   **`werkel_diff`** when the report gives you a reason to look. The report is a
    claim; the diff is the evidence, and most claims are worth checking.
-6. **`fleet_followup`** with specific feedback (same session, same worktree, keeps
+6. **`werkel_followup`** with specific feedback (same session, same worktree, keeps
    context, cheap) — or fix trivia yourself instead of paying for another round.
-7. **`fleet_apply`** to land it, **`fleet_cleanup`** to drop the worktree.
+7. **`werkel_apply`** to land it, **`werkel_cleanup`** to drop the worktree.
 
 ## Writing a work order
 
@@ -88,7 +88,7 @@ Always supply:
 - **done** — the acceptance criterion in one sentence.
 - **constraints** — what must not change (public API, dependencies, formatting).
 
-`fleet_models` reports each model's `capability` (0.6·coding + 0.4·agentic from
+`werkel_models` reports each model's `capability` (0.6·coding + 0.4·agentic from
 Artificial Analysis, `~` when estimated from the name) and `value` (capability per
 dollar). Use `capability` when the task is hard and `value` when it is bulk work.
 
@@ -100,41 +100,41 @@ Escalate on failure rather than starting expensive.
 
 Profiles keep themselves current: a candidate list older than
 `defaults.profileMaxAgeDays` (7) is re-ranked against the live catalogue on the
-next delegation, and the result says so in `notices`. Only lists the fleet wrote
+next delegation, and the result says so in `notices`. Only lists werkel wrote
 itself are refreshed — a hand-written config is never replaced — and nothing the
 budget guard would refuse can ever be proposed, so the worst case is a different
 model under the same ceiling. Within a profile the better model goes first,
 scored against today's catalogue rather than the order the list happens to be in;
-`fleet_delegate` reports that as `reordered` when it changed the outcome.
+`werkel_delegate` reports that as `reordered` when it changed the outcome.
 
-If a profile reports nothing usable, call `fleet_models` with `suggest: true` — it
+If a profile reports nothing usable, call `werkel_models` with `suggest: true` — it
 proposes candidate lists built from the providers this machine is authenticated for,
-which the user can apply with `ocfleet suggest --write` (or `node bin/ocfleet.mjs
+which the user can apply with `werkel suggest --write` (or `node bin/werkel.mjs
 suggest --write` — the short command exists only if it was registered at install
 time, so mention both when you tell someone to run it).
 
 ## Reviewing
 
-Read the patch (`fleet_diff`), not the summary. Watch for the classic worker
+Read the patch (`werkel_diff`), not the summary. Watch for the classic worker
 failure modes:
 
 - **Scope creep** — reformatting, renaming, "while I was here" edits. Reject.
-- **Fake verification** — VERIFICATION says "tests pass" but `fleet_logs` shows no
+- **Fake verification** — VERIFICATION says "tests pass" but `werkel_logs` shows no
   bash call. Check the tool log when a claim matters.
 - **Stubs and TODOs** — `throw new Error("not implemented")` hidden in a large diff.
 - **Deleted tests** — a passing suite achieved by removing assertions.
 - **Invented APIs** — calls to functions that do not exist in this repo.
 
-`fleet_logs` shows every tool call the worker made; use it whenever the diff and
+`werkel_logs` shows every tool call the worker made; use it whenever the diff and
 the report disagree, or a job failed.
 
 ### Leave a verdict behind
 
-The fleet already records the things it can see for itself: whether you applied
+werkel already records the things it can see for itself: whether you applied
 the diff, whether you needed a follow-up, whether the job failed, and whether the
 report claimed a verification that never ran. Those accumulate on their own.
 
-**`fleet_rate` is for what those miss.** Call it when the outcome does not tell
+**`werkel_rate` is for what those miss.** Call it when the outcome does not tell
 the story:
 
 - work that looked fine, was merged, and turned out to be wrong
@@ -145,7 +145,7 @@ The `why` is worth more than the rating and is capped at 200 characters. Write
 the thing that would have saved you time: *"inverted the collapsed-by-default
 rule while implementing its persistence"* beats *"decent work"*. It is shown to
 whoever delegates to that model next, in the `experience` field of
-`fleet_delegate`.
+`werkel_delegate`.
 
 Rating the same job again replaces the earlier verdict — that is how you correct
 one that turned out to be wrong, and it is the only honest way to change your
@@ -159,7 +159,7 @@ keeps producing stubs, either brief against that explicitly or pick another one.
 **Send as many jobs as the work has.** Nothing is ever refused for being the
 eleventh: past `defaults.maxConcurrentJobs` (8) a job comes back as
 `state: "queued"` with a `queuePosition`, and starts by itself the moment a slot
-frees up. `fleet_status` lists the queue separately, and `fleet_wait` moves it
+frees up. `werkel_status` lists the queue separately, and `werkel_wait` moves it
 along while you wait — you never have to poke it.
 
 The limit is not a budget guard (that is `budget`, and it is a hard stop). It
@@ -178,17 +178,17 @@ things follow:
 
 A queued job pins its base commit at submission time, so ten jobs sent against
 one state all see that state, however long the last one waits. Pass
-`maxConcurrent` on a single `fleet_delegate` call to hold that job to a tighter
+`maxConcurrent` on a single `werkel_delegate` call to hold that job to a tighter
 limit than the config's — the queue honours it later too.
 
-## What the fleet learns
+## What werkel learns
 
 Every routable model has a score before a single job has run: `base` from
 published benchmarks (`~` when it had none and was estimated from its name),
 `experience` at exactly 0, `total` the sum the routing sorts by. The experience
 half starts counting the moment the first outcome is recorded, so a model can
-overtake a better-benchmarked one on its own record. `ocfleet board` prints the
-whole field; `fleet_models` covers the same ground from a tool call.
+overtake a better-benchmarked one on its own record. `werkel board` prints the
+whole field; `werkel_models` covers the same ground from a tool call.
 
 Rankings start from published benchmarks, then bend a little towards what
 happened here. Two rules keep that honest, and both matter:
@@ -208,7 +208,7 @@ within a few dozen jobs, and one that was bad can climb back the same way.
 
 Provider outages are deliberately not part of this: a 503 says the endpoint was
 down, not that the model writes bad code, and that already lives in the health
-ledger. `ocfleet experience` shows what has accumulated.
+ledger. `werkel experience` shows what has accumulated.
 
 Expect it to say nothing for a while. Below roughly fifty jobs on a model the
 adjustment is near zero by design, which is the correct behaviour and not a bug.
@@ -217,7 +217,7 @@ adjustment is near zero by design, which is the correct behaviour and not a bug.
 
 The budget guard refuses any model above the configured price ceiling and stops
 new jobs once the daily limit is reached — you cannot accidentally route a bulk
-refactor to a premium model. Check `fleet_models` before naming a model
+refactor to a premium model. Check `werkel_models` before naming a model
 explicitly. Prefer one well-briefed job over three vague ones; each retry costs
 the full context again.
 
@@ -225,14 +225,14 @@ the full context again.
 
 | Symptom | What it means | Do this |
 |---|---|---|
-| `no candidate of profile X is usable` | provider not authenticated or ids changed | `fleet_doctor`, then `opencode auth login` |
+| `no candidate of profile X is usable` | provider not authenticated or ids changed | `werkel_doctor`, then `opencode auth login` |
 | job state `timeout` | model hung, or the task was too big | split the task, raise `timeoutSec`, or escalate the profile |
-| `previousAttempts` non-empty | the provider failed and the job moved to the next candidate by itself | nothing — but if it happens on every job, check `fleet_doctor`; a provider you pay for may be down |
+| `previousAttempts` non-empty | the provider failed and the job moved to the next candidate by itself | nothing — but if it happens on every job, check `werkel_doctor`; a provider you pay for may be down |
 | the model used is not the profile's first candidate | that one failed recently and is in its cooldown | nothing; it is tried again after 30 minutes, or immediately after it succeeds once |
 | `no fallback candidate left` | every model in the profile failed | usually not the models: check credentials, network, or the daily budget |
-| `merge failed: CONFLICT` | two jobs touched the same file | `fleet_apply` with `mode:"patch"` and resolve, or re-delegate one job on the updated base |
-| empty diff but state `done` | worker only talked | read `fleet_logs`; re-delegate with a sharper task and a `verify` command |
-| `daily budget exhausted` | spend cap hit | raise `budget.maxDailyUsd` in `~/.opencode-fleet/fleet.config.json` |
+| `merge failed: CONFLICT` | two jobs touched the same file | `werkel_apply` with `mode:"patch"` and resolve, or re-delegate one job on the updated base |
+| empty diff but state `done` | worker only talked | read `werkel_logs`; re-delegate with a sharper task and a `verify` command |
+| `daily budget exhausted` | spend cap hit | raise `budget.maxDailyUsd` in `~/.werkel/werkel.config.json` |
 
 ## Reporting back to the user
 

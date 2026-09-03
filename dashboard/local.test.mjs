@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 7796;
 const BASE = `http://127.0.0.1:${PORT}`;
-const HOME = path.join(os.tmpdir(), "fleet-local-dash-home");
+const HOME = path.join(os.tmpdir(), "werkel-local-dash-home");
 
 fs.rmSync(HOME, { recursive: true, force: true });
 const jobId = "20260902-120000-loc1";
@@ -28,9 +28,9 @@ fs.writeFileSync(path.join(HOME, "jobs", jobId, "job.json"), JSON.stringify({
 const fails = [];
 const ok = (l, c, e = "") => { console.log(`${c ? "PASS" : "FAIL"}  ${l}${e ? "  — " + e : ""}`); if (!c) fails.push(l); };
 
-const cli = spawn(process.execPath, [path.join(ROOT, "bin/ocfleet.mjs"), "dashboard",
+const cli = spawn(process.execPath, [path.join(ROOT, "bin/werkel.mjs"), "dashboard",
   "--port", String(PORT), "--interval", "1"],
-  { env: { ...process.env, OPENCODE_FLEET_HOME: HOME }, stdio: ["ignore", "pipe", "pipe"] });
+  { env: { ...process.env, WERKEL_HOME: HOME }, stdio: ["ignore", "pipe", "pipe"] });
 let out = "";
 cli.stdout.on("data", (d) => (out += d));
 cli.stderr.on("data", (d) => (out += d));
@@ -70,7 +70,7 @@ try {
   ok("nothing was injected", !after.jobs.some((x) => x.jobId === "fake"));
 
   ok("prints the url for the user", /http:\/\/127\.0\.0\.1:7796/.test(out), out.match(/dashboard\s+(\S+)/)?.[1] ?? "");
-  // Somebody who starts this and then also runs `ocfleet report` at it gets a 401,
+  // Somebody who starts this and then also runs `werkel report` at it gets a 401,
   // because this command mints its own private token — so it has to say, right
   // here, that no second command is wanted.
   ok("says it is already reporting, so nobody starts a second reporter",

@@ -2,7 +2,7 @@ import path from "node:path";
 import { stateDir, ensureDir, readJson, writeJson } from "./util.mjs";
 
 /**
- * What the fleet has learned about model availability from its own runs.
+ * What werkel has learned about model availability from its own runs.
  *
  * Free models on shared endpoints drop out regularly. The failover already
  * recovers from that, but without a memory every job pays the same price again:

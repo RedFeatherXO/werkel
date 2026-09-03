@@ -3,7 +3,7 @@
  *
  * The strongest signal here is not an opinion, it is an action: a diff that got
  * merged was read by someone who then let it into their code. That is revealed
- * preference, and it was being thrown away — fleet_apply wrote nothing back to
+ * preference, and it was being thrown away — werkel_apply wrote nothing back to
  * the job record, so five minutes later nobody could tell an accepted job from a
  * discarded one.
  *
@@ -71,7 +71,7 @@ export function dropOutcome(job, kind) {
 
 /**
  * Record one observation about a finished job. Idempotent per (job, kind): calling
- * fleet_apply twice, or a refresh that runs again over a finished job, must not
+ * werkel_apply twice, or a refresh that runs again over a finished job, must not
  * turn one outcome into two votes.
  */
 export function noteOutcome(job, kind, { note, outcome, weight, at, replace = true } = {}) {

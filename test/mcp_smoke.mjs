@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const REPO = process.argv[2] || "/tmp/demo";
+const REPO = process.argv[2] || path.join(os.tmpdir(), "werkel-demo-repo");
 // fresh repo per run so results are not polluted by earlier merges
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -26,18 +26,18 @@ fs.writeFileSync(REPO + "/opencode.json", JSON.stringify({
 }, null, 2));
 g("add", "-A"); g("commit", "-qm", "init");
 
-// The suite must never touch the user's fleet config or spend real money:
+// The suite must never touch the user's werkel config or spend real money:
 // its own state dir, its own profiles, and an explicit mock model everywhere.
-const TEST_HOME = path.join(os.tmpdir(), "opencode-fleet-teststate");
+const TEST_HOME = path.join(os.tmpdir(), "werkel-teststate");
 {
   const fsx = await import("node:fs");
   fsx.rmSync(TEST_HOME, { recursive: true, force: true });
   fsx.mkdirSync(TEST_HOME, { recursive: true });
-  fsx.writeFileSync(path.join(TEST_HOME, "fleet.config.json"), JSON.stringify({
+  fsx.writeFileSync(path.join(TEST_HOME, "werkel.config.json"), JSON.stringify({
     budget: { allow: ["mock/*"], maxDailyUsd: 100 },
     // Scores are pinned here on purpose: candidates are ordered by quality now, and
     // the failover test needs the broken model to genuinely be first choice —
-    // otherwise the fleet would sensibly start on the working one and never fail over.
+    // otherwise werkel would sensibly start on the working one and never fail over.
     staticPricing: {
       "mock/mock-coder": { prompt: 0.05, completion: 0.2, context: 200000, tools: true, coding: 60, agentic: 60 },
       "mock/mock-broken": { prompt: 0.05, completion: 0.2, context: 200000, tools: true, coding: 90, agentic: 90 },
@@ -46,12 +46,12 @@ const TEST_HOME = path.join(os.tmpdir(), "opencode-fleet-teststate");
     profiles: {
       cheap: { description: "test", candidates: ["mock/mock-coder"] },
       balanced: { description: "test", candidates: ["mock/mock-coder"] },
-      // first candidate always answers 503 — the fleet must move on by itself
+      // first candidate always answers 503 — werkel must move on by itself
       failovertest: { description: "test", candidates: ["mock/mock-broken", "mock/mock-coder"] }
     }
   }, null, 2));
 }
-const TEST_ENV = { ...process.env, OPENCODE_FLEET_HOME: TEST_HOME };
+const TEST_ENV = { ...process.env, WERKEL_HOME: TEST_HOME };
 
 // start the mock model server ourselves so the suite is self-contained
 const MOCK_LOG = path.join(TEST_HOME, "mock.log");
@@ -59,7 +59,20 @@ const mockLogFd = (await import("node:fs")).openSync(MOCK_LOG, "a");
 // Record every request body so the suite can check which tools opencode actually
 // offered the model — that is the only place a denied permission becomes visible.
 const MOCK_REQUESTS = path.join(TEST_HOME, "mock_requests.log");
-const mock = spawn("python3", [path.join(ROOT, "test/mock_llm.py")], {
+// "python3" does not exist on a default Windows install; the launcher there is
+// "python" (or "py"). scripts/run-mock-selftest.mjs already probes for this — the
+// smoke test hard-coded it and would simply never start.
+const PYTHON = process.platform === "win32" ? ["python", "py", "python3"] : ["python3", "python"];
+const pickPython = () => {
+  for (const c of PYTHON) {
+    try {
+      const r = spawnSync(c, ["-c", "print(1)"], { stdio: "ignore" });
+      if (!r.error && r.status === 0) return c;
+    } catch {}
+  }
+  return PYTHON[0];
+};
+const mock = spawn(pickPython(), [path.join(ROOT, "test/mock_llm.py")], {
   stdio: ["ignore", mockLogFd, mockLogFd], detached: false,
   env: { ...process.env, MOCK_LLM_LOG: MOCK_REQUESTS }
 });
@@ -97,7 +110,7 @@ for (;;) {
 const shutdown = () => { try { mock.kill(); } catch {} };
 process.on("exit", shutdown); process.on("SIGINT", () => { shutdown(); process.exit(1); });
 
-const srv = spawn("node", [path.join(ROOT, "bin/ocfleet.mjs"), "mcp"], { stdio: ["pipe", "pipe", "pipe"], env: TEST_ENV });
+const srv = spawn("node", [path.join(ROOT, "bin/werkel.mjs"), "mcp"], { stdio: ["pipe", "pipe", "pipe"], env: TEST_ENV });
 let buf = "", waiters = new Map(), nextId = 1;
 srv.stdout.on("data", (d) => {
   buf += d;
@@ -142,40 +155,40 @@ async function explainFailure(jobId) {
 }
 
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "1" } });
-ok("initialize", init.result?.serverInfo?.name === "opencode-fleet", init.result?.serverInfo?.version);
+ok("initialize", init.result?.serverInfo?.name === "werkel", init.result?.serverInfo?.version);
 srv.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
 
 const tools = await rpc("tools/list", {});
 ok("tools/list", tools.result?.tools?.length >= 12, tools.result.tools.map(t=>t.name).join(","));
 ok("schemas valid", tools.result.tools.every(t => t.inputSchema?.type === "object" && t.description?.length > 40));
 
-const doc = await call("fleet_doctor", { repo: REPO });
-ok("fleet_doctor", doc.ok === true || doc.problems?.length === 0, doc.summary);
+const doc = await call("werkel_doctor", { repo: REPO });
+ok("werkel_doctor", doc.ok === true || doc.problems?.length === 0, doc.summary);
 
-const models = await call("fleet_models", { repo: REPO });
-ok("fleet_models", Array.isArray(models.allowed) && models.allowed.length > 0, `${models.allowed?.length} allowed`);
+const models = await call("werkel_models", { repo: REPO });
+ok("werkel_models", Array.isArray(models.allowed) && models.allowed.length > 0, `${models.allowed?.length} allowed`);
 
 // budget guard must refuse a premium model
-const blocked = await call("fleet_delegate", { task: "x", repo: REPO, model: "openrouter/anthropic/claude-sonnet-5" });
+const blocked = await call("werkel_delegate", { task: "x", repo: REPO, model: "openrouter/anthropic/claude-sonnet-5" });
 ok("budget guard blocks premium", !!blocked.error, blocked.error?.slice(0, 70));
 
 // unknown model must not hang
-const unknown = await call("fleet_delegate", { task: "x", repo: REPO, model: "openrouter/nope/nope" });
+const unknown = await call("werkel_delegate", { task: "x", repo: REPO, model: "openrouter/nope/nope" });
 ok("unknown model refused", !!unknown.error, unknown.error?.slice(0, 60));
 
 // First contact with a provider makes opencode fetch its npm package, which can
 // take minutes. Do that once, slowly, before timing anything else — in a scratch
 // directory and read-only, so the test repo stays pristine for the apply tests.
-const WARM_DIR = path.join(os.tmpdir(), "opencode-fleet-warmup");
+const WARM_DIR = path.join(os.tmpdir(), "werkel-warmup");
 {
   const fsx = await import("node:fs");
   fsx.rmSync(WARM_DIR, { recursive: true, force: true });
   fsx.mkdirSync(WARM_DIR, { recursive: true });
   fsx.copyFileSync(path.join(REPO, "opencode.json"), path.join(WARM_DIR, "opencode.json"));
 }
-const warm = await call("fleet_delegate", { task: "Antworte nur mit: bereit.", repo: WARM_DIR,
+const warm = await call("werkel_delegate", { task: "Antworte nur mit: bereit.", repo: WARM_DIR,
   model: "mock/mock-coder", title: "warmup", timeoutSec: 420, worktree: false, readOnly: true });
-const warmDone = await call("fleet_wait", { jobIds: [warm.jobId], timeoutSec: 420 });
+const warmDone = await call("werkel_wait", { jobIds: [warm.jobId], timeoutSec: 420 });
 const warmState = warmDone.done?.[0]?.state;
 ok("mock provider starts", warmState === "done", warmState ?? "no result");
 if (warmState !== "done") {
@@ -188,54 +201,54 @@ if (warmState !== "done") {
 }
 
 // two parallel jobs, isolated worktrees
-const a = await call("fleet_delegate", { task: "Job A: edit TARGET=src/a.js with CONTENT=export const a = 1;", repo: REPO, model: "mock/mock-coder", title: "A", timeoutSec: 240 });
-const b = await call("fleet_delegate", { task: "Job B: edit TARGET=src/b.js with CONTENT=export const b = 2;", repo: REPO, model: "mock/mock-coder", title: "B", timeoutSec: 240 });
+const a = await call("werkel_delegate", { task: "Job A: edit TARGET=src/a.js with CONTENT=export const a = 1;", repo: REPO, model: "mock/mock-coder", title: "A", timeoutSec: 240 });
+const b = await call("werkel_delegate", { task: "Job B: edit TARGET=src/b.js with CONTENT=export const b = 2;", repo: REPO, model: "mock/mock-coder", title: "B", timeoutSec: 240 });
 ok("two jobs started", !!a.jobId && !!b.jobId, `${a.jobId} / ${b.jobId}`);
 ok("suite stays on the mock model", [a, b].every(j => j.model === "mock/mock-coder"),
    `${a.model} / ${b.model}`);
 ok("separate worktrees", a.worktree.path !== b.worktree.path);
 
-const waited = await call("fleet_wait", { jobIds: [a.jobId, b.jobId], timeoutSec: 300 });
+const waited = await call("werkel_wait", { jobIds: [a.jobId, b.jobId], timeoutSec: 300 });
 const bothDone = waited.done?.length === 2 && waited.done.every(j => j.state === "done");
 ok("both finished", bothDone, JSON.stringify(waited.done?.map(j => j.state)));
 if (!bothDone) { await explainFailure(a.jobId); await explainFailure(b.jobId); await showMockLog("jobs"); }
 
-const res = await call("fleet_result", { jobId: a.jobId });
+const res = await call("werkel_result", { jobId: a.jobId });
 ok("result has report", !!res.report, res.report?.slice(0, 50));
 // The patch is thousands of tokens and the report usually settles the question,
-// so fleet_result names it and fleet_diff hands it over.
+// so werkel_result names it and werkel_diff hands it over.
 ok("result names the changed files without shipping the patch",
    res.diffstat?.includes("a.js") && !res.patch, res.diffstat?.split("\n")[0]);
-ok("result says where the patch is", /fleet_diff/.test(res.patchAvailable ?? ""), res.patchAvailable);
+ok("result says where the patch is", /werkel_diff/.test(res.patchAvailable ?? ""), res.patchAvailable);
 ok("result gives up the patch when asked",
-   (await call("fleet_result", { jobId: a.jobId, includeDiff: true })).patch?.includes("a.js"));
+   (await call("werkel_result", { jobId: a.jobId, includeDiff: true })).patch?.includes("a.js"));
 ok("result no longer mirrors the work order back", res.task === undefined, String(res.task).slice(0, 40));
 ok("cost tracked", res.costUsd > 0, String(res.costUsd));
 
-const logs = await call("fleet_logs", { jobId: a.jobId });
+const logs = await call("werkel_logs", { jobId: a.jobId });
 ok("logs list tool calls", logs.toolCalls?.length > 0, logs.summary);
 
-const fu = await call("fleet_followup", { jobId: a.jobId, message: "Also TARGET=src/a.js with CONTENT=export const a = 42;" });
+const fu = await call("werkel_followup", { jobId: a.jobId, message: "Also TARGET=src/a.js with CONTENT=export const a = 42;" });
 ok("followup starts", !!fu.round, `round ${fu.round}`);
-const fuw = await call("fleet_wait", { jobIds: [a.jobId], timeoutSec: 120 });
+const fuw = await call("werkel_wait", { jobIds: [a.jobId], timeoutSec: 120 });
 ok("followup finishes", fuw.done?.[0]?.state === "done", fuw.done?.[0]?.state);
 
-const applied = await call("fleet_apply", { jobId: a.jobId, mode: "squash" });
+const applied = await call("werkel_apply", { jobId: a.jobId, mode: "squash" });
 ok("apply squash", applied.ok === true, applied.error?.slice(0, 120));
 ok("A landed in main repo", fs.readFileSync(REPO + "/src/a.js", "utf8").includes("42"), fs.readFileSync(REPO + "/src/a.js", "utf8").trim());
-const appliedB = await call("fleet_apply", { jobId: b.jobId, mode: "merge" });
+const appliedB = await call("werkel_apply", { jobId: b.jobId, mode: "merge" });
 ok("second job merges too", appliedB.ok === true, appliedB.error?.slice(0, 120));
 
 // a job whose branch conflicts must fail loudly, not silently
-const c = await call("fleet_delegate", { task: "Job C: edit TARGET=src/a.js with CONTENT=export const a = 999;", repo: REPO, model: "mock/mock-coder", title: "C", timeoutSec: 240, baseRef: "HEAD~2" });
-await call("fleet_wait", { jobIds: [c.jobId], timeoutSec: 120 });
-const conflicted = await call("fleet_apply", { jobId: c.jobId, mode: "merge" });
+const c = await call("werkel_delegate", { task: "Job C: edit TARGET=src/a.js with CONTENT=export const a = 999;", repo: REPO, model: "mock/mock-coder", title: "C", timeoutSec: 240, baseRef: "HEAD~2" });
+await call("werkel_wait", { jobIds: [c.jobId], timeoutSec: 120 });
+const conflicted = await call("werkel_apply", { jobId: c.jobId, mode: "merge" });
 ok("conflict reported with hint", conflicted.ok === false && /conflict|merge failed/i.test(conflicted.error ?? ""), (conflicted.error ?? "").slice(0, 90));
-await call("fleet_cleanup", { jobId: c.jobId, force: true });
+await call("werkel_cleanup", { jobId: c.jobId, force: true });
 
 // B now conflicts or merges cleanly; then clean both up
-const cleanA = await call("fleet_cleanup", { jobId: a.jobId, force: true });
-const cleanB = await call("fleet_cleanup", { jobId: b.jobId, force: true });
+const cleanA = await call("werkel_cleanup", { jobId: a.jobId, force: true });
+const cleanB = await call("werkel_cleanup", { jobId: b.jobId, force: true });
 ok("cleanup both", cleanA.ok && cleanB.ok);
 
 // suggestion ranking: a cheap tier must not be filled with mini/nano models,
@@ -288,7 +301,7 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
 {
   const started = [];
   for (let i = 0; i < 6; i++) {
-    started.push(await call("fleet_delegate", {
+    started.push(await call("werkel_delegate", {
       task: `Concurrency ${i}: edit TARGET=src/c${i}.js with CONTENT=export const c${i} = 1;`,
       repo: REPO, model: "mock/mock-coder", title: `conc-${i}`, timeoutSec: 120, maxConcurrent: 2
     }));
@@ -300,22 +313,22 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
   ok("the queue tells you where you stand", queued.every((r, i) => r.queuePosition === i + 1),
      queued.map((r) => r.queuePosition).join(","));
 
-  const st = await call("fleet_status", {});
+  const st = await call("werkel_status", {});
   ok("never more running than the limit allows", (st.running?.length ?? 0) <= 2,
      `${st.running?.length ?? 0} running, ${st.queued?.length ?? 0} queued`);
 
   // the queue must drain by itself, without anyone poking it
   let allDone = false;
   for (let i = 0; i < 15 && !allDone; i++) {
-    const w = await call("fleet_wait", { jobIds: started.map((r) => r.jobId), timeoutSec: 40 });
+    const w = await call("werkel_wait", { jobIds: started.map((r) => r.jobId), timeoutSec: 40 });
     allDone = (w.stillRunning?.length ?? 0) === 0;
   }
-  const final = await call("fleet_status", { limit: 30 });
+  const final = await call("werkel_status", { limit: 30 });
   const finished = started.filter((r) => final.recent?.some((x) => x.jobId === r.jobId && x.state === "done"));
   ok("the queue drains on its own", finished.length === started.length,
      `${finished.length}/${started.length} finished`);
 
-  for (const j of started) await call("fleet_cleanup", { jobId: j.jobId, force: true });
+  for (const j of started) await call("werkel_cleanup", { jobId: j.jobId, force: true });
 }
 
 // readOnly must mean read-only. The workers run with --auto, so a permission set
@@ -345,70 +358,70 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
     return names;
   };
 
-  const ro = await call("fleet_delegate", {
+  const ro = await call("werkel_delegate", {
     task: "MARKER-RO-NOBASH: read src/a.js and describe what it exports. Change nothing.",
     repo: REPO, model: "mock/mock-coder", title: "ro-nobash",
     readOnly: true, worktree: false, timeoutSec: 120
   });
-  await call("fleet_wait", { jobIds: [ro.jobId], timeoutSec: 60 });
+  await call("werkel_wait", { jobIds: [ro.jobId], timeoutSec: 60 });
   const t1 = toolsOfferedFor("MARKER-RO-NOBASH");
   ok("readOnly denies bash, not merely asks", t1 && !t1.has("bash"), t1 ? [...t1].join(",") : "NO REQUESTS LOGGED");
   ok("readOnly denies writing too", t1 && !t1.has("write") && !t1.has("edit"), t1 ? [...t1].join(",") : "NO REQUESTS LOGGED");
   ok("readOnly says so out loud when there is no worktree",
      (ro.notices ?? []).some((n) => /no worktree/.test(n)), (ro.notices ?? []).join(" | ") || "(no notices)");
 
-  const rb = await call("fleet_delegate", {
+  const rb = await call("werkel_delegate", {
     task: "MARKER-RO-BASH: read src/a.js and report what it exports.",
     repo: REPO, model: "mock/mock-coder", title: "ro-bash",
     readOnly: true, verify: "echo verified", worktree: false, timeoutSec: 120
   });
-  await call("fleet_wait", { jobIds: [rb.jobId], timeoutSec: 60 });
+  await call("werkel_wait", { jobIds: [rb.jobId], timeoutSec: 60 });
   const t2 = toolsOfferedFor("MARKER-RO-BASH");
   ok("a verify command brings bash back", !!t2?.has("bash"), t2 ? [...t2].join(",") : "NO REQUESTS LOGGED");
   ok("but still no way to write a file", t2 && !t2.has("write") && !t2.has("edit"), t2 ? [...t2].join(",") : "NO REQUESTS LOGGED");
   ok("and the escalation is reported, not silent",
      (rb.notices ?? []).some((n) => /bash is allowed/.test(n)), (rb.notices ?? []).join(" | ") || "(no notices)");
 
-  for (const j of [ro, rb]) await call("fleet_cleanup", { jobId: j.jobId, force: true });
+  for (const j of [ro, rb]) await call("werkel_cleanup", { jobId: j.jobId, force: true });
 }
 
 // a finished job must report a real duration, not zero
 {
-  const d = await call("fleet_delegate", { task: "Duration: edit TARGET=src/d.js with CONTENT=export const d = 1;",
+  const d = await call("werkel_delegate", { task: "Duration: edit TARGET=src/d.js with CONTENT=export const d = 1;",
     repo: REPO, model: "mock/mock-coder", title: "duration", timeoutSec: 90 });
   let fin = null;
   for (let i = 0; i < 6 && !fin; i++) {
-    const w = await call("fleet_wait", { jobIds: [d.jobId], timeoutSec: 40 });
+    const w = await call("werkel_wait", { jobIds: [d.jobId], timeoutSec: 40 });
     fin = w.done?.[0] ?? null;
   }
   ok("a finished job carries durationMs for the dashboard", typeof fin?.durationMs === "number" && fin.durationMs > 0,
      `durationMs=${fin?.durationMs} duration=${fin?.duration}`);
-  await call("fleet_cleanup", { jobId: d.jobId, force: true });
+  await call("werkel_cleanup", { jobId: d.jobId, force: true });
 }
 
 // a provider that fails must not end the job: it moves to the next candidate
 {
-  const f = await call("fleet_delegate", {
+  const f = await call("werkel_delegate", {
     task: "Job F: edit TARGET=src/b.js with CONTENT=export const b = 7;",
     repo: REPO, profile: "failovertest", title: "failover", timeoutSec: 90
   });
   ok("failover: starts on the broken model", f.model === "mock/mock-broken", `${f.model}, fallbacks: ${(f.fallbacks || []).join(",")}`);
   let fin = null;
   for (let i = 0; i < 12 && !fin; i++) {
-    const w = await call("fleet_wait", { jobIds: [f.jobId], timeoutSec: 40 });
+    const w = await call("werkel_wait", { jobIds: [f.jobId], timeoutSec: 40 });
     fin = w.done?.[0] ?? null;
   }
   ok("failover: job still succeeds", fin?.state === "done", `${fin?.state} on ${fin?.model}`);
   ok("failover: switched to the working model", fin?.model === "mock/mock-coder", fin?.model);
   ok("failover: the failed attempt is reported", (fin?.previousAttempts ?? []).some(a => a.includes("mock-broken")),
      (fin?.previousAttempts ?? [])[0] ?? "none recorded");
-  const fres = await call("fleet_result", { jobId: f.jobId, includeDiff: true });
+  const fres = await call("werkel_result", { jobId: f.jobId, includeDiff: true });
   ok("failover: work actually landed", fres.patch?.includes("b.js"), fres.diffstat?.split("\n")[0]);
   if (fin?.state !== "done") await explainFailure(f.jobId);
-  await call("fleet_cleanup", { jobId: f.jobId, force: true });
+  await call("werkel_cleanup", { jobId: f.jobId, force: true });
 }
 
-const status = await call("fleet_status", {});
+const status = await call("werkel_status", {});
 ok("status lists history", status.recent?.length >= 2, `${status.recent?.length} recent, spent $${status.spentTodayUsd}`);
 
 srv.kill(); shutdown();

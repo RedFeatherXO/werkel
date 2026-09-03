@@ -1,0 +1,50 @@
+name: tests
+
+# The point of running on Windows here is that "did you keep Windows working?"
+# stops being a question anyone answers from memory. The suite is the answer.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'   # the mock provider the suite runs against
+
+      # No dependencies to install — that is the point of the design, and a
+      # missing lockfile should not turn into a cache miss warning.
+      - name: unit tests
+        run: npm run test:unit
+
+      - name: mock provider self-test
+        run: node scripts/run-mock-selftest.mjs
+
+      - name: dashboard
+        run: npm run test:dashboard
+
+      # The end-to-end suite drives a real MCP server against a mock model. It
+      # needs the opencode CLI, which is a large install, so it runs on one
+      # target rather than all six.
+      - name: end-to-end
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '22'
+        run: |
+          npm i -g opencode-ai
+          npm test
+
+      - name: platform helpers behave on this OS
+        run: node bin/werkel.mjs link --dir ${{ runner.temp }}/werkel-bin

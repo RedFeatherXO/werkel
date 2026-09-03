@@ -1,15 +1,16 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import os from "node:os";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 7799, BASE = `http://127.0.0.1:${PORT}`, TOKEN = "test-token";
-const DATA = "/tmp/fleet-dashboard-test";
+const DATA = path.join(os.tmpdir(), "werkel-dashboard-test");
 fs.rmSync(DATA, { recursive: true, force: true });
 
 const srv = spawn(process.execPath, [path.join(HERE, "server.mjs")], {
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, FLEET_INGEST_TOKEN: TOKEN, HOST: "127.0.0.1" },
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, WERKEL_INGEST_TOKEN: TOKEN, HOST: "127.0.0.1" },
   stdio: ["ignore", "pipe", "pipe"]
 });
 let out = "";
@@ -22,7 +23,7 @@ const ok = (label, cond, extra = "") => {
   if (!cond) fails.push(label);
 };
 const post = (p, body, token = TOKEN) => fetch(BASE + p, {
-  method: "POST", headers: { "content-type": "application/json", ...(token ? { "x-fleet-token": token } : {}) },
+  method: "POST", headers: { "content-type": "application/json", ...(token ? { "x-werkel-token": token } : {}) },
   body: JSON.stringify(body ?? {})
 });
 
@@ -36,10 +37,10 @@ try {
     host: "meik-desktop", ts: Date.now(),
     jobs: [
       { jobId: "20260831-1", state: "running", title: "Refactor auth", model: "openrouter/z-ai/glm-5.3-flash",
-        startedMs: Date.now() - 42000, branch: "fleet/1", repo: "/home/meik/proj", tools: "read×3" },
+        startedMs: Date.now() - 42000, branch: "werkel/1", repo: "/home/meik/proj", tools: "read×3" },
       { jobId: "20260831-2", state: "done", title: "Tests für Parser", model: "openrouter/qwen/qwen3-coder",
         startedMs: Date.now() - 300000, endedMs: Date.now() - 60000, durationMs: 240000, costUsd: 0.0152,
-        branch: "fleet/2", report: "SUMMARY: fertig", diffstat: "test/x.mjs | 12 +++",
+        branch: "werkel/2", report: "SUMMARY: fertig", diffstat: "test/x.mjs | 12 +++",
         changedFiles: [{ status: "A", path: "test/x.mjs" }] },
       { jobId: "20260831-3", state: "failed", title: "Kaputter Job", model: "opencode/glm-4.7",
         startedMs: Date.now() - 90000, durationMs: 30000, error: "provider overloaded",
@@ -78,13 +79,13 @@ try {
   ok("404s an unknown job", (await fetch(`${BASE}/api/jobs/nope%3A1`)).status === 404);
 
   const page = await (await fetch(BASE + "/")).text();
-  ok("serves the page", page.includes("<title>Fleet</title>") && page.includes("EventSource"), `${page.length} bytes`);
+  ok("serves the page", page.includes("<title>werkel</title>") && page.includes("EventSource"), `${page.length} bytes`);
 
   // restart with the same data dir: state must survive
   srv.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 600));
   const srv2 = spawn(process.execPath, [path.join(HERE, "server.mjs")], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, FLEET_INGEST_TOKEN: TOKEN, HOST: "127.0.0.1" }, stdio: "ignore"
+    env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, WERKEL_INGEST_TOKEN: TOKEN, HOST: "127.0.0.1" }, stdio: "ignore"
   });
   for (let i = 0; i < 50; i++) {
     try { if ((await fetch(BASE + "/healthz")).ok) break; } catch {}
@@ -106,7 +107,7 @@ try {
 
   await post("/api/ingest", { host: "meik-desktop", ts: Date.now(), jobs: [], models: [
     boardRow("openrouter/never/used", 70),
-    // a slightly worse benchmark that the fleet's own evidence lifts past it
+    // a slightly worse benchmark that werkel's own evidence lifts past it
     boardRow("openrouter/z-ai/glm-5.3-flash", 68, {
       experience: 5.7, total: 73.7, jobs: 30, goodRate: 0.9, confidence: 0.71,
       notes: [{ at: Date.now(), source: "rated", note: "inverted a default" }] })
@@ -167,7 +168,7 @@ try {
   for (const k of Object.keys(st.forgotten ?? {})) st.forgotten[k] = hourAgo;
   fs.writeFileSync(path.join(DATA, "state.json"), JSON.stringify(st));
   const srv3 = spawn(process.execPath, [path.join(HERE, "server.mjs")], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, FLEET_INGEST_TOKEN: TOKEN, HOST: "127.0.0.1" }, stdio: "ignore"
+    env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, WERKEL_INGEST_TOKEN: TOKEN, HOST: "127.0.0.1" }, stdio: "ignore"
   });
   for (let i = 0; i < 50; i++) {
     try { if ((await fetch(BASE + "/healthz")).ok) break; } catch {}

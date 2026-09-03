@@ -1,4 +1,4 @@
-# Fleet dashboard
+# werkel dashboard
 
 Every OpenCode worker as a card, on a machine that is always on — while the jobs
 themselves keep running wherever your repositories are.
@@ -6,7 +6,7 @@ themselves keep running wherever your repositories are.
 ```
    your PC (jobs run here)                    mini server (this dashboard)
    ───────────────────────                    ────────────────────────────
-   ocfleet report --to …   ──push snapshots──▶  cards, live via SSE
+   werkel report --to …   ──push snapshots──▶  cards, live via SSE
                            ──push the ledger─▶  which models are worth the money
                            ◀──queued commands─  cancel / clean up from the browser
 ```
@@ -17,10 +17,10 @@ click in the browser rides back in the response to that push.
 ## Two tabs
 
 **Jobs** is the card grid, grouped by day. **Modelle** is the ranking of every
-model this fleet could route a job to — not only the ones it has used.
+model werkel could route a job to — not only the ones it has used.
 
 That distinction is the whole point. **Basis** comes from published benchmarks and
-is there before a single job has run; **Erfahrung** is what this fleet has learned
+is there before a single job has run; **Erfahrung** is what werkel has learned
 and is exactly `±0.0` until the model has actually done something; **Gesamt** is
 the sum, and the table is sorted by it. So the ranking is complete on the day you
 open the dashboard, and a model climbs or falls the moment its first outcome is
@@ -40,13 +40,13 @@ is shared — it is the same catalogue everywhere — while experience is added 
 weighted by evidence, never averaged: a laptop with ten jobs does not get the same
 say as a desktop with three hundred.
 
-`ocfleet board` prints the same ranking in a terminal.
+`werkel board` prints the same ranking in a terminal.
 
 ### One command, or two
 
-On the machine where the jobs run, `ocfleet dashboard` is everything: it starts
+On the machine where the jobs run, `werkel dashboard` is everything: it starts
 the server **and** reports on this machine's jobs from inside the same process.
-Do not also start `ocfleet report` against it — that command mints a private
+Do not also start `werkel report` against it — that command mints a private
 ingest token for itself, so a second reporter gets a 401 for something it did not
 need to do.
 
@@ -61,7 +61,7 @@ where the jobs are not.
 No server, no token, no Docker:
 
 ```bash
-ocfleet dashboard --open        # or: node bin/ocfleet.mjs dashboard --open
+werkel dashboard --open        # or: node bin/werkel.mjs dashboard --open
 ```
 
 That starts the dashboard on http://127.0.0.1:7777 and feeds it from this
@@ -86,21 +86,21 @@ docker compose up -d
 Then on the machine where the jobs run:
 
 ```bash
-FLEET_INGEST_TOKEN=<same token> \
-  node bin/ocfleet.mjs report --to http://<server>:7777 --interval 5
+WERKEL_INGEST_TOKEN=<same token> \
+  node bin/werkel.mjs report --to http://<server>:7777 --interval 5
 ```
 
 Open `http://<server>:7777`. Until the first push arrives, the page tells you the
 exact command to run.
 
-To keep the reporter alive across reboots, adapt `ocfleet-report.service`
+To keep the reporter alive across reboots, adapt `werkel-report.service`
 (user, paths, URL) and install it as a systemd unit.
 
 ## Configuration
 
 | Variable | Meaning |
 |---|---|
-| `FLEET_INGEST_TOKEN` | Required in practice. Only pushes with this token are accepted; without it anyone on the network could inject jobs. |
+| `WERKEL_INGEST_TOKEN` | Required in practice. Only pushes with this token are accepted; without it anyone on the network could inject jobs. |
 | `DASHBOARD_USER` + `DASHBOARD_PASS` | Set **both** to put HTTP basic auth in front of the browser view. Leave empty for an open LAN dashboard. The ingest token is independent of this. |
 | `PORT`, `HOST` | Defaults 7777 and 0.0.0.0. |
 | `DATA_DIR` | Where `state.json` lives. In Docker this is the `/data` volume. |

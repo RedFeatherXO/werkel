@@ -255,7 +255,7 @@ export async function delegate(input) {
       state: "queued",
       queuePosition: ahead + 1,
       runningNow: running.length,
-      note: `all ${maxConc} worker slots are busy — this job starts by itself as soon as one frees up; poll with fleet_status / fleet_wait`,
+      note: `all ${maxConc} worker slots are busy — this job starts by itself as soon as one frees up; poll with werkel_status / werkel_wait`,
       // Say where the number comes from. Otherwise the only way to find out why it
       // is 4 and not 8 is to go looking for a config file you may not know exists.
       limitFrom: input.maxConcurrent != null
@@ -274,7 +274,7 @@ export async function delegate(input) {
     worktree: wt.mode === "worktree"
       ? { path: wt.path, branch: wt.branch, base: wt.base }
       : { mode: wt.mode, path: wt.path, warning: wt.warning },
-    note: "job runs detached — poll with fleet_status / fleet_wait, then review with fleet_diff"
+    note: "job runs detached — poll with werkel_status / werkel_wait, then review with werkel_diff"
   };
 }
 
@@ -308,7 +308,7 @@ async function startJob(job, cfg) {
   const promptFile = path.join(dir0, "prompt.md");
   fs.writeFileSync(promptFile, prompt);
 
-  const args = ["run", "--format", "json", "--dir", job.dir, "--title", `fleet ${job.id}`];
+  const args = ["run", "--format", "json", "--dir", job.dir, "--title", `werkel ${job.id}`];
   if (job.autoApprove) args.push("--auto");
   if (job.model) args.push("--model", job.model);
   if (job.agent) args.push("--agent", job.agent);
@@ -429,7 +429,7 @@ async function relaunch(job, why) {
   const promptFile = path.join(dir0, "prompt.md");
   fs.writeFileSync(promptFile, prompt);
 
-  const args = ["run", "--format", "json", "--dir", job.dir, "--title", `fleet ${job.id} (attempt ${job.attemptIndex + 1})`];
+  const args = ["run", "--format", "json", "--dir", job.dir, "--title", `werkel ${job.id} (attempt ${job.attemptIndex + 1})`];
   if (cfg.defaults.autoApprove) args.push("--auto");
   args.push("--model", job.model);
   if (job.agent) args.push("--agent", job.agent);
@@ -537,7 +537,7 @@ export async function refresh(id) {
   }
 
   if (job.autoCommit && job.worktree?.mode === "worktree" && !job.committed) {
-    const c = await commitAll(job.dir, `fleet(${job.id}): ${job.title}`);
+    const c = await commitAll(job.dir, `werkel(${job.id}): ${job.title}`);
     job.committed = c.committed ? c.sha : false;
     if (c.error) job.commitError = c.error;
   }
@@ -616,7 +616,7 @@ export async function refreshAll({ fillQueue = true } = {}) {
   }
   // Prune after the queue drained, so jobs startQueued() just started are running
   // and never prunable. keepJobs bounds the shared jobs store, so it is read once
-  // from the fleet home's global config — loading per job (sourceRepo) would be a
+  // from werkel home's global config — loading per job (sourceRepo) would be a
   // file read per job, and a per-repo override has no scope over a global store.
   const pruned = await pruneJobIds(loadConfig());
   return pruned.length ? out.filter((j) => !pruned.includes(j.id)) : out;
@@ -654,7 +654,7 @@ export function jobView(job, { verbose = false } = {}) {
       : humanDuration(job.durationMs ?? (job.state === "running" ? Date.now() - job.startedMs : null)),
     // How long it sat in the queue. Without this a job that waited four minutes and
     // ran for ten looks identical to one that started instantly — and the difference
-    // is the whole point of knowing the fleet is saturated.
+    // is the whole point of knowing the workers are saturated.
     waitedMs: job.waitedMs || undefined,
     waited: job.waitedMs > 1000 ? humanDuration(job.waitedMs) : undefined,
     costUsd: job.costUsd != null ? Number(job.costUsd.toFixed(4)) : null,
@@ -696,7 +696,7 @@ export async function waitFor(ids, { timeoutSec = 120, pollMs = 2000 } = {}) {
     for (const id of targets) states.push(await refresh(id));
     // Waiting is the one thing a manager does while jobs run, so the queue has to
     // move here too. Without this, waiting on a queued job would wait for someone
-    // else to call fleet_status — i.e. forever.
+    // else to call werkel_status — i.e. forever.
     if (queuedJobs().length) {
       await startQueued();
       for (let i = 0; i < targets.length; i++) states[i] = readJob(targets[i]) ?? states[i];
@@ -709,7 +709,7 @@ export async function waitFor(ids, { timeoutSec = 120, pollMs = 2000 } = {}) {
       // bridge that only stays open for a minute at a time.
       const done = finished.map((j) => {
         const v = jobView(j);
-        if (j.report) v.report = truncate(j.report, 1500, "\n… [truncated — fleet_result has the rest]");
+        if (j.report) v.report = truncate(j.report, 1500, "\n… [truncated — werkel_result has the rest]");
         return v;
       });
       // Nothing finished and nothing changed state: say so in one line rather than

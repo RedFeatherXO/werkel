@@ -23,7 +23,7 @@ export async function modelsDevCatalog({ refresh = false, ttlHours = 24 } = {}) 
     if (cached) return cached;
   }
   try {
-    const res = await fetch(URL, { headers: { "user-agent": "opencode-fleet" } });
+    const res = await fetch(URL, { headers: { "user-agent": "werkel" } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const raw = await res.json();
     const out = {};

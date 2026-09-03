@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ocfleet — Claude manages, OpenCode workers execute.
+ * werkel — Claude manages, OpenCode workers execute.
  * The same engine the MCP server exposes, usable from a shell or CI.
  */
 import path from "node:path";
@@ -60,11 +60,11 @@ function printJobs(list) {
 }
 
 const HELP = `
-ocfleet — delegate coding jobs from Claude to OpenCode workers on cheaper models
+werkel — delegate coding jobs from Claude to OpenCode workers on cheaper models
 
-  ocfleet doctor [--warmup]              check binaries, providers, profiles, budget
-  ocfleet models [--all] [--refresh]     models this machine can route to, with prices
-  ocfleet delegate "<task>" [opts]       start a job (prints the job id)
+  werkel doctor [--warmup]              check binaries, providers, profiles, budget
+  werkel models [--all] [--refresh]     models this machine can route to, with prices
+  werkel delegate "<task>" [opts]       start a job (prints the job id)
       --repo <dir>        repository (default: cwd)
       --profile <name>    cheap | balanced | strong | longcontext | local
       --model <ref>       explicit provider/model
@@ -77,33 +77,33 @@ ocfleet — delegate coding jobs from Claude to OpenCode workers on cheaper mode
       --no-worktree       edit the repo directly instead of an isolated branch
       --timeout <sec>     hard kill (default 1200)
       --wait [sec]        block until it finishes, then print the result
-  ocfleet status [jobId] [--json]        state of one job or all recent jobs
-  ocfleet wait [jobId...] [--timeout s]  block until jobs finish
-  ocfleet result <jobId> [--no-diff]     report + diffstat + patch
-  ocfleet diff <jobId> [--max n]         the patch alone
-  ocfleet logs <jobId> [--tail n]        every tool call the worker made
-  ocfleet followup <jobId> "<feedback>"  continue the same session/worktree
-  ocfleet apply <jobId> [--mode merge|squash|patch] [--target branch]
-  ocfleet cleanup <jobId> [--force]      remove worktree + branch
-  ocfleet forget <jobId> [--force]       delete the record too, so it disappears from status
-  ocfleet cancel <jobId>                 kill a running job
-  ocfleet report --to <url> [opts]       push job state to a remote dashboard
-      --token <t>         auth token (env FLEET_INGEST_TOKEN works too)
+  werkel status [jobId] [--json]        state of one job or all recent jobs
+  werkel wait [jobId...] [--timeout s]  block until jobs finish
+  werkel result <jobId> [--no-diff]     report + diffstat + patch
+  werkel diff <jobId> [--max n]         the patch alone
+  werkel logs <jobId> [--tail n]        every tool call the worker made
+  werkel followup <jobId> "<feedback>"  continue the same session/worktree
+  werkel apply <jobId> [--mode merge|squash|patch] [--target branch]
+  werkel cleanup <jobId> [--force]      remove worktree + branch
+  werkel forget <jobId> [--force]       delete the record too, so it disappears from status
+  werkel cancel <jobId>                 kill a running job
+  werkel report --to <url> [opts]       push job state to a remote dashboard
+      --token <t>         auth token (env WERKEL_INGEST_TOKEN works too)
       --interval <sec>    seconds between cycles (default 5)
       --once              one cycle and exit (for cron and tests)
-  ocfleet probe [--profile n] [--all]    check which models actually answer right now
-  ocfleet health [--reset]               what the fleet learned about model availability
-  ocfleet dashboard [opts]               run the dashboard on this machine, no server needed
+  werkel probe [--profile n] [--all]    check which models actually answer right now
+  werkel health [--reset]               what werkel learned about model availability
+  werkel dashboard [opts]               run the dashboard on this machine, no server needed
       --port <n>          default 7777
       --host <addr>       default 127.0.0.1 (use 0.0.0.0 to reach it from the LAN)
       --open              open it in your browser
       --interval <sec>    how often to refresh, default 3
-  ocfleet mcp                            run as an MCP stdio server (for Claude)
-  ocfleet install [--scope user|project|print]   register the MCP server with Claude Code
-  ocfleet link [--dir <path>]            put ocfleet on your PATH (default ~/.local/bin)
-  ocfleet board [--all]                  every routable model ranked: base score + experience
-  ocfleet experience [--profile <p>]     only the models this fleet has actually used
-  ocfleet init-config [--force]          write a starter fleet.config.json
+  werkel mcp                            run as an MCP stdio server (for Claude)
+  werkel install [--scope user|project|print]   register the MCP server with Claude Code
+  werkel link [--dir <path>]            put werkel on your PATH (default ~/.local/bin)
+  werkel board [--all]                  every routable model ranked: base score + experience
+  werkel experience [--profile <p>]     only the models werkel has actually used
+  werkel init-config [--force]          write a starter werkel.config.json
 `;
 
 const cmds = {
@@ -155,7 +155,7 @@ const cmds = {
 
   async delegate(a) {
     const task = a._[0];
-    if (!task) return p("need a task: ocfleet delegate \"fix the failing auth test\" --repo .");
+    if (!task) return p("need a task: werkel delegate \"fix the failing auth test\" --repo .");
     const res = await J.delegate({
       task,
       repo: path.resolve(a.flags.repo ?? process.cwd()),
@@ -185,7 +185,7 @@ const cmds = {
       if (res.worktree?.warning) p(`  ${SYM.warn} ${res.worktree.warning}`);
     }
     for (const n of res.notices ?? []) p(`  ${SYM.warn} ${n}`);
-    p(`  follow   ocfleet wait ${res.jobId}   |   ocfleet logs ${res.jobId}\n`);
+    p(`  follow   werkel wait ${res.jobId}   |   werkel logs ${res.jobId}\n`);
     if (a.flags.wait) {
       const secs = typeof a.flags.wait === "string" ? Number(a.flags.wait) : 900;
       await cmds.wait({ _: [res.jobId], flags: { timeout: secs } });
@@ -205,21 +205,21 @@ const cmds = {
       for (const c of prof.candidates) p(`      ${c}`);
     }
     if (!a.flags.write) {
-      p(`\n  add to your fleet.config.json:\n`);
+      p(`\n  add to your werkel.config.json:\n`);
       p(JSON.stringify({ profiles: r.profiles }, null, 2).split("\n").map((l) => "  " + l).join("\n"));
-      p(`\n  or run: ocfleet suggest --write\n`);
+      p(`\n  or run: werkel suggest --write\n`);
       return;
     }
     const { stateDir, ensureDir, readJson, writeJson } = await import("../src/util.mjs");
-    const target = path.join(ensureDir(stateDir()), "fleet.config.json");
+    const target = path.join(ensureDir(stateDir()), "werkel.config.json");
     const current = readJson(target, {});
     if (fs.existsSync(target)) fs.copyFileSync(target, target + ".bak");
     current.profiles = r.profiles;
-    // The stamp is what lets the fleet refresh this list later: without it, an
+    // The stamp is what lets werkel refresh this list later: without it, an
     // auto-refresh would not know whether these profiles are its own to replace.
     current.profilesWrittenAt = new Date().toISOString();
     writeJson(target, current);
-    p(`\n  ${SYM.ok} wrote ${Object.keys(r.profiles).length} profiles to ${target}${fs.existsSync(target + ".bak") ? " (backup: fleet.config.json.bak)" : ""}\n`);
+    p(`\n  ${SYM.ok} wrote ${Object.keys(r.profiles).length} profiles to ${target}${fs.existsSync(target + ".bak") ? " (backup: werkel.config.json.bak)" : ""}\n`);
   },
 
   async status(a) {
@@ -274,7 +274,7 @@ const cmds = {
   },
 
   async logs(a) {
-    const r = await (await import("../src/mcp.mjs")).callTool("fleet_logs", { jobId: a._[0], tail: Number(a.flags.tail ?? 40) });
+    const r = await (await import("../src/mcp.mjs")).callTool("werkel_logs", { jobId: a._[0], tail: Number(a.flags.tail ?? 40) });
     jsonOut(r);
   },
 
@@ -302,13 +302,13 @@ const cmds = {
 
   async report(a) {
     if (!a.flags.to) {
-      p("missing --to <dashboard-url>, e.g. ocfleet report --to http://minipc:7777");
+      p("missing --to <dashboard-url>, e.g. werkel report --to http://minipc:7777");
       process.exitCode = 1;
       return;
     }
     await report({
       to: a.flags.to,
-      token: a.flags.token ?? process.env.FLEET_INGEST_TOKEN,
+      token: a.flags.token ?? process.env.WERKEL_INGEST_TOKEN,
       intervalSec: Number(a.flags.interval ?? 5),
       once: !!a.flags.once,
       log: (msg) => p(`  ${new Date().toISOString()}  ${msg}`)
@@ -340,7 +340,7 @@ const cmds = {
         if (!targets.includes(m)) targets.push(m);
       }
     }
-    if (!targets.length) { p("no candidates configured — run `ocfleet suggest --write`"); return; }
+    if (!targets.length) { p("no candidates configured — run `werkel suggest --write`"); return; }
 
     const timeout = Number(a.flags.timeout ?? 90) * 1000;
     p(`\n  probing ${targets.length} model(s), ${Math.round(timeout / 1000)}s each\n`);
@@ -372,7 +372,7 @@ const cmds = {
     }
     const rows = H.summary();
     if (a.flags.json) return jsonOut(rows);
-    if (!rows.length) { p("\n  nothing recorded yet — run some jobs or `ocfleet probe`\n"); return; }
+    if (!rows.length) { p("\n  nothing recorded yet — run some jobs or `werkel probe`\n"); return; }
     p(`\n  ${"model".padEnd(46)} ${"ok".padStart(4)} ${"fail".padStart(5)}  last trouble`);
     for (const r of rows) {
       const when = r.lastFail ? new Date(r.lastFail).toISOString().replace("T", " ").slice(0, 16) : "-";
@@ -440,9 +440,9 @@ const cmds = {
   async mcp() { serve(); },
 
   /**
-   * Put `ocfleet` on the PATH. The docs promised this command for a long time
+   * Put `werkel` on the PATH. The docs promised this command for a long time
    * while nothing ever created it, so every example had to be run as
-   * `node bin/ocfleet.mjs ...` instead. It also repairs the executable bits,
+   * `node bin/werkel.mjs ...` instead. It also repairs the executable bits,
    * because copying this repo around (through a file-transfer bridge, a zip on
    * Windows, an editor) drops them silently and then the launcher stops working.
    */
@@ -453,7 +453,7 @@ const cmds = {
       cwd: repo, refresh: !!a.flags.refresh, includeBlocked: !!a.flags.all
     });
     if (a.flags.json) return jsonOut(rows);
-    if (!rows.length) { p("\n  no routable models — run ocfleet doctor\n"); return; }
+    if (!rows.length) { p("\n  no routable models — run werkel doctor\n"); return; }
 
     const money = (v) => v == null ? "?" : v === 0 ? "0" : v < 0.1 ? v.toFixed(3) : v.toFixed(2);
     p("");
@@ -470,7 +470,7 @@ const cmds = {
       for (const nt of (r.notes ?? []).slice(0, 1)) if (nt.note) p(`       ${SYM.dot} ${nt.note}`);
     });
     const used = rows.filter((r) => r.jobs > 0).length;
-    p(`\n  ${rows.length} routable, ${used} with experience · base from published benchmarks (~ = estimated from the name), exp is what this fleet learned\n`);
+    p(`\n  ${rows.length} routable, ${used} with experience · base from published benchmarks (~ = estimated from the name), exp is what werkel learned\n`);
   },
 
   async experience(a) {
@@ -484,7 +484,7 @@ const cmds = {
     if (a.flags.profile) rows = rows.filter((r) => r.profile === a.flags.profile);
     if (a.flags.json) return jsonOut(rows);
     if (!rows.length) {
-      p("\n  nothing recorded yet — the fleet learns from applied diffs, follow-ups and fleet_rate\n");
+      p("\n  nothing recorded yet — werkel learns from applied diffs, follow-ups and werkel_rate\n");
       return;
     }
     p("");
@@ -500,38 +500,49 @@ const cmds = {
 
   async link(a) {
     const { chmodSync, existsSync, mkdirSync, symlinkSync, unlinkSync, lstatSync } = fs;
-    const launcher = path.join(ROOT, process.platform === "win32" ? "ocfleet.cmd" : "ocfleet");
+    const launcher = path.join(ROOT, process.platform === "win32" ? "werkel.cmd" : "werkel");
 
-    for (const f of [path.join(ROOT, "ocfleet"), path.join(ROOT, "bin", "ocfleet.mjs"), path.join(ROOT, "scripts", "install.sh")]) {
+    for (const f of [path.join(ROOT, "werkel"), path.join(ROOT, "bin", "werkel.mjs"), path.join(ROOT, "scripts", "install.sh")]) {
       try { if (existsSync(f)) chmodSync(f, 0o755); } catch {}
     }
-    if (process.platform !== "win32") p(`  ${SYM.ok} made ${path.relative(ROOT, launcher)} and bin/ocfleet.mjs executable`);
+    if (process.platform !== "win32") p(`  ${SYM.ok} made ${path.relative(ROOT, launcher)} and bin/werkel.mjs executable`);
+
+    // PATH is split by ";" on Windows and ":" everywhere else — one wrong separator
+    // and this reports "not on your PATH" for a folder that plainly is.
+    const sep = process.platform === "win32" ? ";" : ":";
+    const onPathAlready = (dir) => (process.env.PATH ?? "").split(sep)
+      .some((x) => x && path.resolve(x) === path.resolve(dir));
 
     if (process.platform === "win32") {
-      p(`\n  On Windows there is no symlink to make. Either add this folder to your PATH:`);
-      p(`      $env:Path += ";${ROOT}"          # this session`);
-      p(`      [Environment]::SetEnvironmentVariable("Path", $env:Path + ";${ROOT}", "User")`);
-      p(`  or just call .\\ocfleet from here.\n`);
+      if (onPathAlready(ROOT)) { p(`\n  ${SYM.ok} this folder is already on your PATH — werkel works from anywhere\n`); return; }
+      // No symlinks without developer mode or an admin shell, so the honest move is
+      // to put this folder on PATH. werkel.cmd next to it is what Windows will find.
+      p(`\n  Windows has no symlink to make here. Put this folder on your PATH:`);
+      p(`      [Environment]::SetEnvironmentVariable("Path",`);
+      p(`        [Environment]::GetEnvironmentVariable("Path", "User") + ";${ROOT}", "User")`);
+      p(`  then open a new terminal. For this session only:`);
+      p(`      $env:Path += ";${ROOT}"`);
+      p(`\n  Or skip all of it and call .\\werkel from this folder.\n`);
       return;
     }
 
     const dir = a.flags.dir ?? path.join(os.homedir(), ".local", "bin");
-    const dest = path.join(dir, "ocfleet");
+    const dest = path.join(dir, "werkel");
     try {
       mkdirSync(dir, { recursive: true });
       try { if (lstatSync(dest)) unlinkSync(dest); } catch {}
       symlinkSync(launcher, dest);
     } catch (e) {
       p(`\n  ${SYM.warn} could not link into ${dir}: ${e.message}`);
-      p(`  run it from here instead: ${ROOT}/ocfleet\n`);
+      p(`  run it from here instead: ${ROOT}/werkel\n`);
       return;
     }
     p(`  ${SYM.ok} linked ${dest} -> ${launcher}`);
 
     // A link nobody can reach is not an install. Say so instead of claiming success.
-    const onPath = (process.env.PATH ?? "").split(":").includes(dir);
+    const onPath = onPathAlready(dir);
     if (onPath) {
-      p(`\n  ready: ocfleet doctor\n`);
+      p(`\n  ready: werkel doctor\n`);
     } else {
       p(`\n  ${SYM.warn} ${dir} is not on your PATH. Add it, then open a new shell:`);
       p(`      echo 'export PATH="${dir}:$PATH"' >> ~/.bashrc\n`);
@@ -539,7 +550,7 @@ const cmds = {
   },
 
   async install(a) {
-    const entry = path.join(ROOT, "bin", "ocfleet.mjs");
+    const entry = path.join(ROOT, "bin", "werkel.mjs");
     const scope = a.flags.scope ?? "user";
     const { runSync, which, stateDir, ensureDir, readJson, writeJson } = await import("../src/util.mjs");
 
@@ -547,11 +558,11 @@ const cmds = {
     // invisible. Pin both to absolute paths at registration time.
     const nodeBin = process.execPath;
     const ocBin = which("opencode");
-    const cfgJson = { mcpServers: { "opencode-fleet": { command: nodeBin, args: [entry, "mcp"] } } };
+    const cfgJson = { mcpServers: { "werkel": { command: nodeBin, args: [entry, "mcp"] } } };
 
     const gitPath = which("git");
     if (ocBin || gitPath) {
-      const target = path.join(ensureDir(stateDir()), "fleet.config.json");
+      const target = path.join(ensureDir(stateDir()), "werkel.config.json");
       const current = readJson(target, {});
       let changed = false;
       if (ocBin && current.opencodeBin !== ocBin) {
@@ -573,28 +584,28 @@ const cmds = {
     if (scope === "print") return jsonOut(cfgJson);
 
     if (which("claude")) {
-      const r = runSync("claude", ["mcp", "add", "--scope", scope, "opencode-fleet", "--", nodeBin, entry, "mcp"]);
+      const r = runSync("claude", ["mcp", "add", "--scope", scope, "werkel", "--", nodeBin, entry, "mcp"]);
       p(r.ok ? `  ${SYM.ok} registered with Claude Code (scope: ${scope})` : `  ${SYM.fail} Claude Code registration failed: ${(r.stderr || r.error || "").trim()}`);
     } else {
       p(`  ${SYM.dot} claude CLI not found (npm i -g @anthropic-ai/claude-code to get it)`);
     }
 
-    // `ocfleet` as a global command — nice to have, never required
-    if (which("npm") && !which("ocfleet")) {
+    // `werkel` as a global command — nice to have, never required
+    if (which("npm") && !which("werkel")) {
       const link = runSync("npm", ["link"], { cwd: ROOT });
-      if (link.ok && which("ocfleet")) {
-        p(`  ${SYM.ok} \`ocfleet\` is now available everywhere`);
+      if (link.ok && which("werkel")) {
+        p(`  ${SYM.ok} \`werkel\` is now available everywhere`);
       } else {
         p(`  ${SYM.dot} could not register the short command (that is fine)`);
-        p(`    use ${process.platform === "win32" ? ".\\ocfleet <command>" : "./ocfleet <command>"} in this folder, or node ${path.join("bin", "ocfleet.mjs")} <command>`);
+        p(`    use ${process.platform === "win32" ? ".\\werkel <command>" : "./werkel <command>"} in this folder, or node ${path.join("bin", "werkel.mjs")} <command>`);
       }
-    } else if (which("ocfleet")) {
-      p(`  ${SYM.ok} \`ocfleet\` command available`);
+    } else if (which("werkel")) {
+      p(`  ${SYM.ok} \`werkel\` command available`);
     }
 
     p("\n  For the Claude desktop app, add this to its MCP config:\n");
     p(JSON.stringify(cfgJson, null, 2).split("\n").map((l) => "    " + l).join("\n"));
-    const skillSrc = path.join(ROOT, "skills", "opencode-fleet");
+    const skillSrc = path.join(ROOT, "skills", "werkel");
     p(process.platform === "win32"
       ? `\n  Skill: Copy-Item -Recurse -Force "${skillSrc}" "$HOME\\.claude\\skills\\"\n`
       : `\n  Skill: cp -r ${skillSrc} ~/.claude/skills/\n`);
@@ -602,7 +613,7 @@ const cmds = {
 
   async "init-config"(a) {
     const { stateDir, ensureDir } = await import("../src/util.mjs");
-    const target = path.join(ensureDir(stateDir()), "fleet.config.json");
+    const target = path.join(ensureDir(stateDir()), "werkel.config.json");
     if (fs.existsSync(target) && !a.flags.force) return p(`exists: ${target} (use --force to overwrite)`);
     if (fs.existsSync(target)) { fs.copyFileSync(target, target + ".bak"); p(`  backup: ${target}.bak`); }
     const starter = {

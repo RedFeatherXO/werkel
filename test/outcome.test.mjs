@@ -9,13 +9,13 @@ import path from "node:path";
 // outage, a read-only investigation and a cancelled job all look like "no diff
 // was applied" while saying nothing whatsoever about the model.
 
-process.env.OPENCODE_FLEET_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "ocfleet-out-"));
+process.env.WERKEL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "werkel-out-"));
 const O = await import("../src/outcome.mjs");
 const E = await import("../src/experience.mjs");
 
 const job = (extra = {}) => ({
   id: "20260903-1", model: "openrouter/z-ai/glm-5.3-flash", profile: "cheap",
-  state: "done", worktree: { mode: "worktree", path: "/tmp/x", branch: "fleet/x" }, ...extra
+  state: "done", worktree: { mode: "worktree", path: "/tmp/x", branch: "werkel/x" }, ...extra
 });
 
 test("only a job that could produce a reviewable diff is evidence", () => {

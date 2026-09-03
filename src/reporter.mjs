@@ -16,19 +16,19 @@ async function postJson(url, body, token) {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(token ? { "X-Fleet-Token": token } : {})
+      ...(token ? { "X-Werkel-Token": token } : {})
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
   });
   if (res.status === 401) {
     // The number alone sends people hunting for a config problem they do not have:
-    // `ocfleet dashboard` mints a private token and reports on itself, so a second
+    // `werkel dashboard` mints a private token and reports on itself, so a second
     // reporter aimed at it is both unauthorised and unnecessary.
     throw new Error(`${url} responded 401 — it wants an ingest token. `
-      + `If that is a local \`ocfleet dashboard\`, it already reports on this machine and you do not need `
-      + `\`ocfleet report\` at all. For a remote dashboard, pass the same token it was started with: `
-      + `--token <t> or FLEET_INGEST_TOKEN=<t>.`);
+      + `If that is a local \`werkel dashboard\`, it already reports on this machine and you do not need `
+      + `\`werkel report\` at all. For a remote dashboard, pass the same token it was started with: `
+      + `--token <t> or WERKEL_INGEST_TOKEN=<t>.`);
   }
   if (!res.ok) throw new Error(`${url} responded ${res.status}`);
   return res.json();

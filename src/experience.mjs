@@ -2,7 +2,7 @@ import path from "node:path";
 import { stateDir, ensureDir, readJson, writeJson } from "./util.mjs";
 
 /**
- * What the fleet has learned about how each model actually performs on this
+ * What werkel has learned about how each model actually performs on this
  * machine.
  *
  * Benchmarks rank models, but they were measured on someone else's machine

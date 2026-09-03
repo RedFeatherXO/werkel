@@ -1,4 +1,4 @@
-# opencode-fleet
+# werkel
 
 **Claude plans and reviews. Cheap models type.**
 
@@ -8,7 +8,7 @@ Ollama model — while Claude stays the manager: it writes the work order, revie
 diff, and decides what lands.
 
 ```
-   Claude (manager)                    opencode-fleet (MCP)              OpenCode workers
+   Claude (manager)                    werkel (MCP)              OpenCode workers
    ─────────────────                   ────────────────────              ─────────────────
    splits the work        ──delegate──▶  budget guard                ──▶ job A · qwen3-coder
    writes work orders                    git worktree per job        ──▶ job B · glm-4.7-flash
@@ -18,31 +18,58 @@ diff, and decides what lands.
 
 Every job runs in its own **git worktree on its own branch**, so four workers can run at
 once without stepping on each other, and nothing reaches your working tree until you
-merge it. A **price guard** refuses any model above your ceiling and stops the fleet at a
+merge it. A **price guard** refuses any model above your ceiling and stops work at a
 daily spend limit.
 
 ## Install
 
 ```bash
-git clone <your-fork> opencode-fleet && cd opencode-fleet
+git clone <your-fork> werkel && cd werkel
 bash scripts/install.sh       # checks node/git/opencode, registers the MCP server, installs the skill
 opencode auth login           # openrouter (recommended), zai, deepseek, …
-ocfleet doctor --warmup
+werkel doctor --warmup
+```
+
+### One command
+
+**Linux / macOS**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OWNER/werkel/main/scripts/bootstrap.sh | bash
+```
+
+**Windows** (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/OWNER/werkel/main/scripts/bootstrap.ps1 | iex
+```
+
+Both clone into `~/werkel` (override with `WERKEL_DIR`), check node and
+git, and run the installer for your platform. Run either again later and it pulls
+and re-installs instead of cloning — the same line is also the updater.
+
+Piping a script from the internet into a shell means running code you have not
+read, which is a reasonable thing to object to. The two-step version does exactly
+the same work and lets you look first:
+
+```bash
+git clone https://github.com/OWNER/werkel && cd werkel
+bash scripts/install.sh          # or: powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
 No npm dependencies — plain Node ≥18, git, and the `opencode` CLI.
 
-### If `ocfleet` is not found
+### If `werkel` is not found
 
 `install.sh` symlinks it into `~/.local/bin`. If that directory is new, your shell
 does not know about it yet — open a new one, or run the linker on its own:
 
 ```bash
-node bin/ocfleet.mjs link                 # also repairs the executable bits
-node bin/ocfleet.mjs link --dir ~/bin     # somewhere else on your PATH
+node bin/werkel.mjs link                 # also repairs the executable bits
+node bin/werkel.mjs link --dir ~/bin     # somewhere else on your PATH
 ```
 
-`./ocfleet` from the repo folder always works and needs no setup at all. Copying
+`./werkel` from the repo folder always works and needs no setup at all. Copying
 this repo through a zip, an editor or a file-sync bridge tends to drop the
 executable bit; `link` puts it back, which is why it is safe to re-run.
 
@@ -61,9 +88,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
 One caveat that is not ours: **opencode itself recommends WSL on Windows** for
-full compatibility. The fleet runs natively either way, but if workers behave
-strangely there, try the same setup inside WSL before suspecting the fleet —
-`ocfleet doctor` prints this note on Windows for the same reason.
+full compatibility. werkel runs natively either way, but if workers behave
+strangely there, try the same setup inside WSL before suspecting werkel —
+`werkel doctor` prints this note on Windows for the same reason.
 
 `--warmup` matters: OpenCode downloads a provider package on its very first real run, which
 otherwise looks like a hang.
@@ -72,12 +99,12 @@ otherwise looks like a hang.
 
 ```json
 { "mcpServers": {
-    "opencode-fleet": { "command": "node", "args": ["/abs/path/opencode-fleet/bin/ocfleet.mjs", "mcp"] } } }
+    "werkel": { "command": "node", "args": ["/abs/path/werkel/bin/werkel.mjs", "mcp"] } } }
 ```
 
-Claude Code: `claude mcp add --scope user opencode-fleet -- node /abs/path/bin/ocfleet.mjs mcp`
+Claude Code: `claude mcp add --scope user werkel -- node /abs/path/bin/werkel.mjs mcp`
 
-The manager skill (`skills/opencode-fleet/SKILL.md`) teaches Claude when to delegate, how to
+The manager skill (`skills/werkel/SKILL.md`) teaches Claude when to delegate, how to
 brief a worker and what to look for in a review. Copy it to `~/.claude/skills/` (the
 installer does this).
 
@@ -86,13 +113,13 @@ installer does this).
 Three equivalent ways, pick one:
 
 ```bash
-ocfleet doctor              # after ./scripts/install.sh registered the command
-./ocfleet doctor            # launcher in this folder, works immediately
-node bin/ocfleet.mjs doctor # always works, no setup at all
+werkel doctor              # after ./scripts/install.sh registered the command
+./werkel doctor            # launcher in this folder, works immediately
+node bin/werkel.mjs doctor # always works, no setup at all
 ```
 
-On Windows use `.\ocfleet doctor` or `node bin\ocfleet.mjs doctor`. The examples
-below write `ocfleet` for brevity.
+On Windows use `.\werkel doctor` or `node bin\werkel.mjs doctor`. The examples
+below write `werkel` for brevity.
 
 ## Use it
 
@@ -104,48 +131,48 @@ Ask Claude, in plain language:
 Claude then drives the tools itself. From a shell the same engine is available:
 
 ```bash
-ocfleet dashboard --open             # every worker as a card, locally, no setup
-ocfleet probe                        # which models actually answer right now
-ocfleet health                       # what the fleet learned about availability
-ocfleet models                       # what you can route to, with prices
-ocfleet suggest --write              # build profiles from your authenticated providers
-ocfleet delegate "Wrap every fetch in src/api/*.ts in withRetry" \
+werkel dashboard --open             # every worker as a card, locally, no setup
+werkel probe                        # which models actually answer right now
+werkel health                       # what werkel learned about availability
+werkel models                       # what you can route to, with prices
+werkel suggest --write              # build profiles from your authenticated providers
+werkel delegate "Wrap every fetch in src/api/*.ts in withRetry" \
    --repo . --profile cheap \
    --context "withRetry lives in src/lib/retry.ts and takes (fn, opts)" \
    --verify "npx tsc --noEmit" --wait
-ocfleet status                       # all jobs, cost, duration
-ocfleet diff  <jobId>                # review
-ocfleet apply <jobId> --mode squash  # land it
-ocfleet cleanup <jobId>
+werkel status                       # all jobs, cost, duration
+werkel diff  <jobId>                # review
+werkel apply <jobId> --mode squash  # land it
+werkel cleanup <jobId>
 ```
 
 ## The tools Claude gets
 
 | Tool | What it does |
 |---|---|
-| `fleet_delegate` | Start a job (returns immediately with a jobId; queues it if every slot is busy) |
-| `fleet_wait` | Block until jobs finish — starts waiting jobs as slots free up |
-| `fleet_status` | Running + queued + recent jobs, cost, duration |
-| `fleet_result` | Worker report + changed files + patch |
-| `fleet_diff` | Just the patch |
-| `fleet_logs` | Every tool call the worker made (catches fake "tests pass") |
-| `fleet_followup` | Send review feedback into the same session/worktree |
-| `fleet_apply` | merge / squash / write a .patch |
-| `fleet_cancel`, `fleet_cleanup` | Kill a job, remove worktree + branch |
-| `fleet_models` | Routable models with prices and guard verdicts (`suggest:true` proposes profiles) |
-| `fleet_doctor` | Binaries, providers, profiles, budget, stuck jobs |
+| `werkel_delegate` | Start a job (returns immediately with a jobId; queues it if every slot is busy) |
+| `werkel_wait` | Block until jobs finish — starts waiting jobs as slots free up |
+| `werkel_status` | Running + queued + recent jobs, cost, duration |
+| `werkel_result` | Worker report + changed files + patch |
+| `werkel_diff` | Just the patch |
+| `werkel_logs` | Every tool call the worker made (catches fake "tests pass") |
+| `werkel_followup` | Send review feedback into the same session/worktree |
+| `werkel_apply` | merge / squash / write a .patch |
+| `werkel_cancel`, `werkel_cleanup` | Kill a job, remove worktree + branch |
+| `werkel_models` | Routable models with prices and guard verdicts (`suggest:true` proposes profiles) |
+| `werkel_doctor` | Binaries, providers, profiles, budget, stuck jobs |
 
 ## Configuration
 
-`~/.opencode-fleet/fleet.config.json` (global) or `.opencode-fleet.json` in a repo.
-Start from [`config/fleet.config.example.json`](config/fleet.config.example.json).
+`~/.werkel/werkel.config.json` (global) or `.werkel.json` in a repo.
+Start from [`config/werkel.config.example.json`](config/werkel.config.example.json).
 
 ```jsonc
 {
   "budget": {
     "maxPromptUsdPerMTok": 1.0,      // hard ceiling, input
     "maxCompletionUsdPerMTok": 4.0,  // hard ceiling, output
-    "maxDailyUsd": 10.0,             // fleet stops for the day
+    "maxDailyUsd": 10.0,             // werkel stops for the day
     "requireToolSupport": true,      // a model without tool calling cannot edit files
     "deny": ["*gpt-5*", "*claude*"]  // never route here
   },
@@ -165,19 +192,19 @@ than silently billed. Provider setup for OpenCode itself:
 [`config/opencode.providers.example.json`](config/opencode.providers.example.json).
 
 Models are ranked on published benchmarks, not guesswork. The OpenRouter catalogue
-carries Artificial Analysis indices for ~165 of its models, and the fleet scores a
+carries Artificial Analysis indices for ~165 of its models, and werkel scores a
 worker as `0.6 × coding_index + 0.4 × agentic_index` — a worker has to write the code
 *and* drive the tools. `value = capability / (1 + blended price)` with
 `blended = (3 × input + output) / 4`, since a coding turn reads far more than it writes.
 Models without published numbers are estimated from their name, deliberately below a
-measured mid-tier model, so an unknown never outranks a proven one. `ocfleet models`
+measured mid-tier model, so an unknown never outranks a proven one. `werkel models`
 prints both numbers (`~` marks an estimate).
 
 Don't hand-write candidate lists — generate them from what you actually have:
 
 ```bash
-ocfleet suggest           # show proposed profiles, ranked by price and coding fitness
-ocfleet suggest --write   # write them into ~/.opencode-fleet/fleet.config.json (keeps a .bak)
+werkel suggest           # show proposed profiles, ranked by price and coding fitness
+werkel suggest --write   # write them into ~/.werkel/werkel.config.json (keeps a .bak)
 ```
 
 Free endpoints also collapse under parallel load — a measured run of ten
@@ -185,10 +212,10 @@ simultaneous jobs on a free model produced three HTTP 429s and a vanished
 worker, while the same jobs on `cheap` cost a few cents and completed. Use free
 models for sequential bulk work, not for fan-out.
 
-Free endpoints go down for minutes at a time. The fleet remembers that: a model
+Free endpoints go down for minutes at a time. werkel remembers that: a model
 that fails with a provider error is skipped for the next 30 minutes and the job
 moves straight to the profile's next candidate, instead of rediscovering the
-outage every time. `ocfleet health` shows what it learned, `ocfleet probe` tests
+outage every time. `werkel health` shows what it learned, `werkel probe` tests
 every candidate on purpose before you rely on them, and a success clears a
 model's record immediately.
 
@@ -202,9 +229,9 @@ affordable candidate runs anyway, with a warning — a stale model list never bl
 
 ## How a job runs
 
-1. `fleet_delegate` resolves a model through the budget guard and pins the base commit.
-2. If a worker slot is free the job starts at once: `fleet/<jobId>` plus a worktree under
-   `~/.opencode-fleet/worktrees/`. If all `maxConcurrentJobs` slots are busy the job is
+1. `werkel_delegate` resolves a model through the budget guard and pins the base commit.
+2. If a worker slot is free the job starts at once: `werkel/<jobId>` plus a worktree under
+   `~/.werkel/worktrees/`. If all `maxConcurrentJobs` slots are busy the job is
    **queued**, not refused — it comes back with a `queuePosition` and starts on its own when
    a slot frees up. Send as many jobs as the work has.
 3. The task becomes a structured work order (`jobDir/prompt.md`): task, manager context,
@@ -212,7 +239,7 @@ affordable candidate runs anyway, with a warning — a stale model list never bl
 4. OpenCode runs **detached** with `--format json`; a runner process enforces the timeout and
    records the exit code, so a job survives an MCP restart and can never hang a tool call.
 5. On completion the harness commits the worker's changes on its branch, parses tokens and
-   cost from the event stream, and appends to `~/.opencode-fleet/spend/<date>.json` — and
+   cost from the event stream, and appends to `~/.werkel/spend/<date>.json` — and
    hands the freed slot to whichever job has been waiting longest.
 6. You review, then merge, squash, or export a patch.
 
@@ -222,7 +249,7 @@ one key. The daily spend cap and the price ceilings are separate, and they refus
 than queue. A queued job keeps the base commit it was submitted against, so a long wait
 never silently changes what the worker started from.
 
-Job state lives in `~/.opencode-fleet/jobs/<id>/`: `prompt.md`, `events.ndjson`,
+Job state lives in `~/.werkel/jobs/<id>/`: `prompt.md`, `events.ndjson`,
 `stderr.log`, `run.json`, `job.json`. Nothing is hidden.
 
 ## Safety notes
@@ -243,12 +270,12 @@ what it is — a shell that can write files even though the file tools cannot.
 **No worktree means no sandbox.** `worktree: false` puts the worker in your actual directory
 on your actual branch, with auto-approved permissions and no diff to review. It is the right
 choice for read-only investigation and the wrong one for almost everything else;
-`fleet_delegate` says so in `notices` every time, whether the directory is a git repo or not.
+`werkel_delegate` says so in `notices` every time, whether the directory is a git repo or not.
 
 ## Development
 
 ```bash
-node test/mcp_smoke.mjs /tmp/opencode-fleet-testrepo
+node test/mcp_smoke.mjs /tmp/werkel-testrepo
 ```
 
 The suite drives the MCP server over real stdio JSON-RPC against a mock OpenAI-compatible

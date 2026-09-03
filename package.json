@@ -1,18 +1,18 @@
 {
-  "name": "opencode-fleet",
+  "name": "werkel",
   "version": "0.1.0",
   "description": "Claude manages, OpenCode workers on cheap models execute — an MCP bridge with git-worktree isolation and a price guard.",
   "type": "module",
-  "bin": { "ocfleet": "./bin/ocfleet.mjs" },
+  "bin": { "werkel": "./bin/werkel.mjs" },
   "engines": { "node": ">=18" },
   "scripts": {
-    "doctor": "node bin/ocfleet.mjs doctor",
-    "mcp": "node bin/ocfleet.mjs mcp",
+    "doctor": "node bin/werkel.mjs doctor",
+    "mcp": "node bin/werkel.mjs mcp",
     "test": "node --test test/budget.test.mjs test/failover.test.mjs test/runner.test.mjs test/health.test.mjs test/permission.test.mjs test/forget.test.mjs test/wait.test.mjs test/profiles.test.mjs test/experience.test.mjs test/outcome.test.mjs && node scripts/run-mock-selftest.mjs && node test/mcp_smoke.mjs",
     "test:unit": "node --test test/budget.test.mjs test/failover.test.mjs test/runner.test.mjs test/health.test.mjs test/permission.test.mjs test/forget.test.mjs test/wait.test.mjs test/profiles.test.mjs test/experience.test.mjs test/outcome.test.mjs",
     "test:mock": "python3 test/mock_llm_selftest.py",
     "test:dashboard": "node dashboard/selftest.mjs && node dashboard/integration.mjs && node dashboard/local.test.mjs",
-    "dashboard": "node bin/ocfleet.mjs dashboard --open",
+    "dashboard": "node bin/werkel.mjs dashboard --open",
     "dashboard:server": "node dashboard/server.mjs"
   },
   "files": ["bin", "src", "config", "skills", "docs", "scripts", "README.md"],

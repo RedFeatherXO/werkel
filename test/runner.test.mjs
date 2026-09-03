@@ -11,7 +11,7 @@ import { rankExecutables, standardBinDirs, whichDeep } from "../src/util.mjs";
 const RUNNER = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "runner.mjs");
 
 function tmp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "fleet-runner-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "werkel-runner-"));
 }
 
 /** Run the runner against a spec and wait for it to write the exit file. */

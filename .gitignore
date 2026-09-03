@@ -1,5 +1,5 @@
 node_modules/
 *.log
 .DS_Store
-.opencode-fleet.json
+.werkel.json
 *.tar.gz

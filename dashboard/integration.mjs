@@ -1,28 +1,30 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import os from "node:os";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const PORT = 7798, BASE = `http://127.0.0.1:${PORT}`, TOKEN = "integration-token";
-const DATA = "/tmp/fleet-dash-integration";
-const FLEET_HOME = "/tmp/fleet-home-integration";
+const DATA = path.join(os.tmpdir(), "werkel-dash-integration");
+const NOWHERE = path.join(os.tmpdir(), "werkel-nowhere");
+const FLEET_HOME_DIR = path.join(os.tmpdir(), "werkel-home-integration");
 fs.rmSync(DATA, { recursive: true, force: true });
-fs.rmSync(FLEET_HOME, { recursive: true, force: true });
+fs.rmSync(FLEET_HOME_DIR, { recursive: true, force: true });
 
-// a job store as the fleet would leave it behind
+// a job store as werkel would leave it behind
 const jobId = "20260831-999999-abcd";
-fs.mkdirSync(path.join(FLEET_HOME, "jobs", jobId), { recursive: true });
-fs.writeFileSync(path.join(FLEET_HOME, "jobs", jobId, "job.json"), JSON.stringify({
+fs.mkdirSync(path.join(FLEET_HOME_DIR, "jobs", jobId), { recursive: true });
+fs.writeFileSync(path.join(FLEET_HOME_DIR, "jobs", jobId, "job.json"), JSON.stringify({
   id: jobId, state: "done", title: "Integrationsjob", model: "openrouter/z-ai/glm-5.3-flash",
-  dir: "/tmp/nowhere", sourceRepo: "/tmp/nowhere", worktree: { mode: "in-place", path: "/tmp/nowhere" },
+  dir: NOWHERE, sourceRepo: NOWHERE, worktree: { mode: "in-place", path: NOWHERE },
   startedMs: Date.now() - 120000, endedMs: Date.now() - 60000, durationMs: 60000,
-  costUsd: 0.0137, toolSummary: "read×5, write×2", report: "SUMMARY: erledigt.", jobDir: path.join(FLEET_HOME, "jobs", jobId)
+  costUsd: 0.0137, toolSummary: "read×5, write×2", report: "SUMMARY: erledigt.", jobDir: path.join(FLEET_HOME_DIR, "jobs", jobId)
 }));
 
 const srv = spawn(process.execPath, [path.join(HERE, "server.mjs")], {
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, FLEET_INGEST_TOKEN: TOKEN, HOST: "127.0.0.1" }, stdio: "ignore"
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: DATA, WERKEL_INGEST_TOKEN: TOKEN, HOST: "127.0.0.1" }, stdio: "ignore"
 });
 for (let i = 0; i < 50; i++) {
   try { if ((await fetch(BASE + "/healthz")).ok) break; } catch {}
@@ -33,8 +35,8 @@ const fails = [];
 const ok = (l, c, e = "") => { console.log(`${c ? "PASS" : "FAIL"}  ${l}${e ? "  — " + e : ""}`); if (!c) fails.push(l); };
 
 const runReporter = () => new Promise((resolve) => {
-  const r = spawn(process.execPath, [path.join(ROOT, "bin/ocfleet.mjs"), "report", "--to", BASE, "--token", TOKEN, "--once"],
-    { env: { ...process.env, OPENCODE_FLEET_HOME: FLEET_HOME }, stdio: ["ignore", "pipe", "pipe"] });
+  const r = spawn(process.execPath, [path.join(ROOT, "bin/werkel.mjs"), "report", "--to", BASE, "--token", TOKEN, "--once"],
+    { env: { ...process.env, WERKEL_HOME: FLEET_HOME_DIR }, stdio: ["ignore", "pipe", "pipe"] });
   let out = ""; r.stdout.on("data", (d) => (out += d)); r.stderr.on("data", (d) => (out += d));
   r.on("close", (code) => resolve({ code, out }));
 });

@@ -1,16 +1,16 @@
 services:
-  fleet-dashboard:
+  werkel-dashboard:
     build: .
-    # or, once you have pushed it somewhere: image: your-registry/fleet-dashboard:latest
-    container_name: fleet-dashboard
+    # or, once you have pushed it somewhere: image: your-registry/werkel-dashboard:latest
+    container_name: werkel-dashboard
     restart: unless-stopped
     ports:
       - "7777:7777"
     volumes:
-      - fleet-data:/data
+      - werkel-data:/data
     environment:
       # Required: only holders of this token can push job data.
-      FLEET_INGEST_TOKEN: "${FLEET_INGEST_TOKEN:?set FLEET_INGEST_TOKEN in .env}"
+      WERKEL_INGEST_TOKEN: "${WERKEL_INGEST_TOKEN:?set WERKEL_INGEST_TOKEN in .env}"
       # Optional: set both to put a login in front of the browser view.
       DASHBOARD_USER: "${DASHBOARD_USER:-}"
       DASHBOARD_PASS: "${DASHBOARD_PASS:-}"
@@ -19,4 +19,4 @@ services:
       TZ: "${TZ:-Europe/Berlin}"
 
 volumes:
-  fleet-data:
+  werkel-data:

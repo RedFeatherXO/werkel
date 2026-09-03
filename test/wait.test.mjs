@@ -11,8 +11,8 @@ import path from "node:path";
 
 let home, J;
 function newHome() {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), "ocfleet-wait-"));
-  process.env.OPENCODE_FLEET_HOME = home;
+  home = fs.mkdtempSync(path.join(os.tmpdir(), "werkel-wait-"));
+  process.env.WERKEL_HOME = home;
 }
 function writeJob(id, extra = {}) {
   const dir = path.join(home, "jobs", id);
@@ -76,7 +76,7 @@ test("the first wait reports in full, a repeat wait stays quiet", async () => {
 
 test("one line beats one view — that is where the polling cost went", () => {
   const job = { id: "20260903-085300-3e65", state: "running", title: "messjob-langer-wait",
-    model: "openrouter/z-ai/glm-5.3-flash", dir: "/home/meik/Programs/MCP-Servers/opencode-fleet",
+    model: "openrouter/z-ai/glm-5.3-flash", dir: "/home/meik/Programs/MCP-Servers/werkel",
     startedMs: Date.now() - 129000, worktree: null, waitedMs: 2 };
   const line = J.jobLine(job).length;
   const view = JSON.stringify(J.jobView(job)).length;
@@ -126,7 +126,7 @@ test("a report is truncated, so one finished job cannot flood the poll", async (
   writeJob("b1", { state: "done", report: "x".repeat(50000), endedMs: Date.now(), durationMs: 1000 });
   const r = await J.waitFor(["b1"], { timeoutSec: 0, pollMs: 1 });
   assert.ok(r.done[0].report.length < 2000, `${r.done[0].report.length} chars`);
-  assert.match(r.done[0].report, /fleet_result/);
+  assert.match(r.done[0].report, /werkel_result/);
 });
 
 test("jobView no longer mirrors the work order back at its author", () => {

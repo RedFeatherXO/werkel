@@ -5,7 +5,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { forget, pruneJobRecords, jobDir } from "../src/jobs.mjs";
 
-// These tests run against a throwaway OPENCODE_FLEET_HOME with hand-written
+// These tests run against a throwaway WERKEL_HOME with hand-written
 // job.json files — no worker is ever started. Deleting a record is the one
 // operation here that cannot be undone, so most of the suite pins the guards
 // that keep active or unmerged work out of the shredder.
@@ -13,8 +13,8 @@ import { forget, pruneJobRecords, jobDir } from "../src/jobs.mjs";
 let home = null;
 
 function newHome() {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), "ocfleet-forget-"));
-  process.env.OPENCODE_FLEET_HOME = home;
+  home = fs.mkdtempSync(path.join(os.tmpdir(), "werkel-forget-"));
+  process.env.WERKEL_HOME = home;
   return home;
 }
 
@@ -74,10 +74,10 @@ test("pruneJobRecords keeps the newest keepJobs records and deletes older ones",
 
 test("pruneJobRecords never deletes a record whose worktree path still exists", async () => {
   newHome();
-  const wtDir = fs.mkdtempSync(path.join(os.tmpdir(), "ocfleet-wt-"));
+  const wtDir = fs.mkdtempSync(path.join(os.tmpdir(), "werkel-wt-"));
   // the oldest job holds the only unmerged working copy: it must survive, and it
   // must not push the newer finished jobs past the limit either
-  writeJob("w0", { state: "done", queuedAt: 0, startedMs: 0, worktree: { mode: "worktree", path: wtDir, branch: "fleet/w0", repo: home } });
+  writeJob("w0", { state: "done", queuedAt: 0, startedMs: 0, worktree: { mode: "worktree", path: wtDir, branch: "werkel/w0", repo: home } });
   for (let i = 1; i <= 3; i++) writeJob(`w${i}`, { state: "done", queuedAt: i * 1000, startedMs: i * 1000 });
   const deleted = await pruneJobRecords({ defaults: { keepJobs: 2 } });
   assert.equal(deleted, 1);            // w0 is not counted against the limit: 3 prunable, keep 2

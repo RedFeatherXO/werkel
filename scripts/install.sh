@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# opencode-fleet installer — checks the toolchain, registers the MCP server, installs the skill.
+# werkel installer — checks the toolchain, registers the MCP server, installs the skill.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 say() { printf "  %s\n" "$*"; }
 
 echo
-echo "opencode-fleet setup"
+echo "werkel setup"
 echo
 
 command -v node >/dev/null || { say "✗ node not found — install Node 18+"; exit 1; }
@@ -22,8 +22,8 @@ if ! command -v opencode >/dev/null; then
 fi
 say "✓ opencode $(opencode --version 2>/dev/null || echo '?')"
 
-mkdir -p "${OPENCODE_FLEET_HOME:-$HOME/.opencode-fleet}"
-CFG="${OPENCODE_FLEET_HOME:-$HOME/.opencode-fleet}/fleet.config.json"
+mkdir -p "${WERKEL_HOME:-$HOME/.werkel}"
+CFG="${WERKEL_HOME:-$HOME/.werkel}/werkel.config.json"
 if [ ! -f "$CFG" ]; then
   cp "$ROOT/config/fleet.config.example.json" "$CFG"
   say "✓ wrote $CFG  (edit budget + profiles there)"
@@ -33,22 +33,22 @@ fi
 
 # registers with Claude Code if present, pins absolute binaries, prints the
 # desktop-app JSON block
-node "$ROOT/bin/ocfleet.mjs" install --scope user
+node "$ROOT/bin/werkel.mjs" install --scope user
 
-# put `ocfleet` on the PATH — the docs referred to it long before anything created it
-node "$ROOT/bin/ocfleet.mjs" link
+# put `werkel` on the PATH — the docs referred to it long before anything created it
+node "$ROOT/bin/werkel.mjs" link
 
 SKILLS_DIR="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DIR"
-cp -r "$ROOT/skills/opencode-fleet" "$SKILLS_DIR/" 2>/dev/null \
-  && say "✓ installed manager skill to $SKILLS_DIR/opencode-fleet" \
-  || say "· could not install skill (copy skills/opencode-fleet manually)"
+cp -r "$ROOT/skills/werkel" "$SKILLS_DIR/" 2>/dev/null \
+  && say "✓ installed manager skill to $SKILLS_DIR/werkel" \
+  || say "· could not install skill (copy skills/werkel manually)"
 
 echo
 say "next:"
 say "  1. opencode auth login                              # openrouter / zai / deepseek / opencode zen"
-say "  2. ocfleet suggest --write                          # profiles from the providers you have"
-say "  3. ocfleet doctor                                   # verify"
-say "     (if 'ocfleet' is not found, open a new shell or use $ROOT/ocfleet)"
+say "  2. werkel suggest --write                          # profiles from the providers you have"
+say "  3. werkel doctor                                   # verify"
+say "     (if 'werkel' is not found, open a new shell or use $ROOT/werkel)"
 say "  4. ask Claude: \"delegate the failing parser tests to a cheap worker\""
 echo

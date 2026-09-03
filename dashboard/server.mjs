@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Fleet dashboard — a read-mostly view of every OpenCode worker, meant to run on
+ * werkel dashboard — a read-mostly view of every OpenCode worker, meant to run on
  * a small always-on server while the jobs themselves run elsewhere.
  *
  * The machine running the jobs pushes snapshots here (it needs no open port) and
@@ -17,7 +17,7 @@ import crypto from "node:crypto";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // Configuration is resolved per start(), not at import time, so the same server
-// can be embedded in `ocfleet dashboard` and run standalone in a container.
+// can be embedded in `werkel dashboard` and run standalone in a container.
 let PORT, HOST, DATA_DIR, STATE_FILE, INGEST_TOKEN, USER, PASS, RETENTION, REPORT_SELF_SEC;
 let state = { jobs: {}, commands: {}, hosts: {}, forgotten: {}, models: {} };
 
@@ -26,7 +26,7 @@ function configure(opts = {}) {
   HOST = opts.host ?? process.env.HOST ?? "0.0.0.0";
   DATA_DIR = opts.dataDir ?? process.env.DATA_DIR ?? path.join(HERE, "data");
   STATE_FILE = path.join(DATA_DIR, "state.json");
-  INGEST_TOKEN = opts.ingestToken ?? process.env.FLEET_INGEST_TOKEN ?? "";
+  INGEST_TOKEN = opts.ingestToken ?? process.env.WERKEL_INGEST_TOKEN ?? "";
   USER = opts.user ?? process.env.DASHBOARD_USER ?? "";
   PASS = opts.pass ?? process.env.DASHBOARD_PASS ?? "";
   RETENTION = Number(opts.retention ?? process.env.RETENTION_JOBS ?? 300);
@@ -129,7 +129,7 @@ function safeEqual(a, b) {
 
 function ingestAllowed(req) {
   if (!INGEST_TOKEN) return true;                 // unset = open, and we warn at boot
-  return safeEqual(req.headers["x-fleet-token"] ?? "", INGEST_TOKEN);
+  return safeEqual(req.headers["x-werkel-token"] ?? "", INGEST_TOKEN);
 }
 
 /** Basic auth, only when both variables are set. */
@@ -140,7 +140,7 @@ function viewerAllowed(req, res) {
     const [u, p] = Buffer.from(header.slice(6), "base64").toString("utf8").split(":");
     if (safeEqual(u ?? "", USER) && safeEqual(p ?? "", PASS)) return true;
   }
-  res.writeHead(401, { "WWW-Authenticate": 'Basic realm="fleet dashboard"' });
+  res.writeHead(401, { "WWW-Authenticate": 'Basic realm="werkel dashboard"' });
   res.end("authentication required");
   return false;
 }
@@ -164,7 +164,7 @@ async function handle(req, res) {
 
   // --- ingest from the machine that runs the jobs
   if (req.method === "POST" && p === "/api/ingest") {
-    if (!ingestAllowed(req)) return json(res, 401, { error: "bad or missing X-Fleet-Token" });
+    if (!ingestAllowed(req)) return json(res, 401, { error: "bad or missing X-Werkel-Token" });
     let body;
     try { body = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
 
@@ -200,7 +200,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && p.startsWith("/api/commands/") && p.endsWith("/result")) {
-    if (!ingestAllowed(req)) return json(res, 401, { error: "bad or missing X-Fleet-Token" });
+    if (!ingestAllowed(req)) return json(res, 401, { error: "bad or missing X-Werkel-Token" });
     const id = p.split("/")[3];
     let body = {};
     try { body = await readBody(req); } catch {}
@@ -412,18 +412,18 @@ export async function start(opts = {}) {
 // standalone (docker, systemd, `node dashboard/server.mjs`)
 const runDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (runDirectly) {
-  // Self-reporting is opt-in, not inferred from a fleet home being present. This
+  // Self-reporting is opt-in, not inferred from werkel home being present. This
   // server usually runs on a machine where the jobs are NOT — that is the whole
   // point of the push design — and a server that quietly started reporting
   // someone else's leftover state would be a surprise. On the machine with the
-  // jobs, `ocfleet dashboard` is the one command that does both.
+  // jobs, `werkel dashboard` is the one command that does both.
   const info = await start();
-  console.log(`fleet dashboard on ${info.url}`);
+  console.log(`werkel dashboard on ${info.url}`);
   console.log(`  data     ${info.stateFile} (${info.restoredJobs} jobs restored)`);
   console.log(`  source   ${info.reportingSelf
     ? `this machine, every ${info.reportingSelf}s (REPORT_SELF_SEC=0 to turn off)`
-    : "remote reporters only — run `ocfleet report --to <url>` where the jobs are"}`);
-  console.log(`  ingest   ${info.ingestProtected ? "token required" : "OPEN - set FLEET_INGEST_TOKEN so only your machine can push"}`);
+    : "remote reporters only — run `werkel report --to <url>` where the jobs are"}`);
+  console.log(`  ingest   ${info.ingestProtected ? "token required" : "OPEN - set WERKEL_INGEST_TOKEN so only your machine can push"}`);
   console.log(`  viewing  ${info.loginRequired ? `basic auth as "${USER}"` : "no login (set DASHBOARD_USER and DASHBOARD_PASS to require one)"}`);
 
   const shutdown = async () => { await info.close(); process.exit(0); };

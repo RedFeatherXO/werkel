@@ -1,6 +1,6 @@
 /**
  * Dependency-free MCP stdio server. Node >= 18, no npm install needed.
- * Exposes the fleet as tools so any Claude agent can act as the manager.
+ * Exposes werkel as tools so any Claude agent can act as the manager.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -11,18 +11,18 @@ import { applyJob, removeWorktree, diffSummary } from "./worktree.mjs";
 import { doctor } from "./doctor.mjs";
 import { truncate } from "./util.mjs";
 
-const NAME = "opencode-fleet";
+const NAME = "werkel";
 const VERSION = "0.1.0";
 
 const S = {
-  jobId: { type: "string", description: "Job id returned by fleet_delegate" }
+  jobId: { type: "string", description: "Job id returned by werkel_delegate" }
 };
 
 const TOOLS = [
   {
-    name: "fleet_delegate",
+    name: "werkel_delegate",
     description:
-      "Hand one self-contained coding task to an OpenCode worker running a cheaper model. Returns a jobId immediately; the worker runs detached in its own git worktree/branch, so several jobs can run in parallel without touching each other. Write the task like a work order for someone who has not seen the repo: what to change, which files matter, what 'done' means, and a verification command. Then poll with fleet_wait/fleet_status, review with fleet_diff, and land it with fleet_apply.",
+      "Hand one self-contained coding task to an OpenCode worker running a cheaper model. Returns a jobId immediately; the worker runs detached in its own git worktree/branch, so several jobs can run in parallel without touching each other. Write the task like a work order for someone who has not seen the repo: what to change, which files matter, what 'done' means, and a verification command. Then poll with werkel_wait/werkel_status, review with werkel_diff, and land it with werkel_apply.",
     inputSchema: {
       type: "object",
       required: ["task", "repo"],
@@ -51,39 +51,39 @@ const TOOLS = [
     }
   },
   {
-    name: "fleet_wait",
-    description: "Block until the given jobs finish (or the wait times out), then report what changed. A finished job comes back with its report already attached, so you rarely need fleet_result to find out how it went. A reply of {unchanged:true, stillRunning:[...]} means nothing at all has happened since your last wait — there is nothing to think about, just call again. Keep timeoutSec at or below 45 when this server is reached through a bridge or proxy that caps call duration (a desktop bridge typically cuts off at 60s); call it repeatedly rather than waiting long once.",
+    name: "werkel_wait",
+    description: "Block until the given jobs finish (or the wait times out), then report what changed. A finished job comes back with its report already attached, so you rarely need werkel_result to find out how it went. A reply of {unchanged:true, stillRunning:[...]} means nothing at all has happened since your last wait — there is nothing to think about, just call again. Keep timeoutSec at or below 45 when this server is reached through a bridge or proxy that caps call duration (a desktop bridge typically cuts off at 60s); call it repeatedly rather than waiting long once.",
     inputSchema: { type: "object", properties: {
       jobIds: { type: "array", items: { type: "string" }, description: "Jobs to wait for. Omit = all running jobs." },
       timeoutSec: { type: "number", description: "How long to wait, default 120. The job itself keeps running if the wait expires." } } }
   },
   {
-    name: "fleet_status",
+    name: "werkel_status",
     description: "State of one job or of all recent jobs: running/done/failed/timeout, duration, cost, which tools the worker used.",
     inputSchema: { type: "object", properties: { jobId: S.jobId, limit: { type: "number", description: "How many recent jobs to list (default 15)" }, verbose: { type: "boolean" } } }
   },
   {
-    name: "fleet_result",
-    description: "Result of a finished job: the worker's report (SUMMARY/FILES/VERIFICATION/ASSUMPTIONS/BLOCKED), changed files, diffstat and cost. The patch is NOT included unless you ask for it — read this first, then fleet_diff when the report gives you a reason to.",
-    inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, includeDiff: { type: "boolean", description: "Also include the full patch (default false — it is large; use fleet_diff instead once you know you want it)" }, maxDiffChars: { type: "number" } } }
+    name: "werkel_result",
+    description: "Result of a finished job: the worker's report (SUMMARY/FILES/VERIFICATION/ASSUMPTIONS/BLOCKED), changed files, diffstat and cost. The patch is NOT included unless you ask for it — read this first, then werkel_diff when the report gives you a reason to.",
+    inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, includeDiff: { type: "boolean", description: "Also include the full patch (default false — it is large; use werkel_diff instead once you know you want it)" }, maxDiffChars: { type: "number" } } }
   },
   {
-    name: "fleet_diff",
+    name: "werkel_diff",
     description: "The worker's patch, so you can review it line by line before it touches the main branch.",
     inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, maxChars: { type: "number", description: "Truncate the patch at this length (default 12000)" } } }
   },
   {
-    name: "fleet_logs",
+    name: "werkel_logs",
     description: "Raw activity of a job: every tool call the worker made, plus stderr. Use when a job failed or did something unexpected.",
     inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, tail: { type: "number", description: "How many tool calls to show (default 40)" } } }
   },
   {
-    name: "fleet_followup",
+    name: "werkel_followup",
     description: "Send review feedback to a finished job. The worker continues in the SAME session and worktree, so it keeps its context — much cheaper than re-delegating.",
     inputSchema: { type: "object", required: ["jobId", "message"], properties: { jobId: S.jobId, message: { type: "string", description: "What to fix or change." }, model: { type: "string", description: "Escalate to another model for this round." }, timeoutSec: { type: "number" } } }
   },
   {
-    name: "fleet_apply",
+    name: "werkel_apply",
     description: "Land a reviewed job in the main repo: merge its branch, squash-merge it, or write a .patch file. Refuses when the main working copy is dirty.",
     inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId,
       mode: { type: "string", enum: ["merge", "squash", "patch"], description: "merge (default), squash, or patch file" },
@@ -91,18 +91,18 @@ const TOOLS = [
       message: { type: "string", description: "Commit message" } } }
   },
   {
-    name: "fleet_cancel",
+    name: "werkel_cancel",
     description: "Kill a running job (its worktree and partial changes stay for inspection).",
     inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId } }
   },
   {
-    name: "fleet_cleanup",
-    description: "Remove a job's worktree and branch once you are done with it. With purge:true the job record itself is deleted too, so the job disappears from fleet_status and the dashboard — use only after the branch is merged or no longer wanted.",
+    name: "werkel_cleanup",
+    description: "Remove a job's worktree and branch once you are done with it. With purge:true the job record itself is deleted too, so the job disappears from werkel_status and the dashboard — use only after the branch is merged or no longer wanted.",
     inputSchema: { type: "object", required: ["jobId"], properties: { jobId: S.jobId, force: { type: "boolean", description: "Discard uncommitted worker changes" }, deleteBranch: { type: "boolean", description: "Default true" }, purge: { type: "boolean", description: "Also delete the job record itself, so it disappears from status and the dashboard" } } }
   },
   {
-    name: "fleet_rate",
-    description: "Record how a finished job actually turned out, after you have read the diff. This is the one judgement the fleet cannot make for itself, and it outweighs every signal it collects on its own. Rate a job once you know — landing it, discarding it or sending a follow-up are already recorded automatically, so rate when you have something those do not capture: work that looked fine and was wrong, a fake verification, or a job that was better than its outcome suggests. Rating the same job again replaces the earlier verdict, which is how you correct one that turned out to be wrong.",
+    name: "werkel_rate",
+    description: "Record how a finished job actually turned out, after you have read the diff. This is the one judgement werkel cannot make for itself, and it outweighs every signal it collects on its own. Rate a job once you know — landing it, discarding it or sending a follow-up are already recorded automatically, so rate when you have something those do not capture: work that looked fine and was wrong, a fake verification, or a job that was better than its outcome suggests. Rating the same job again replaces the earlier verdict, which is how you correct one that turned out to be wrong.",
     inputSchema: { type: "object", required: ["jobId", "outcome"], properties: {
       jobId: S.jobId,
       outcome: { type: "string", enum: ["good", "mixed", "bad"], description: "good = you would delegate this again; mixed = usable after fixing; bad = you threw it away or it cost more to fix than to do yourself" },
@@ -111,12 +111,12 @@ const TOOLS = [
     } }
   },
   {
-    name: "fleet_models",
+    name: "werkel_models",
     description: "Which models this machine can actually route to, with price per 1M tokens and whether the budget guard allows them. Check this before picking a model explicitly.",
     inputSchema: { type: "object", properties: { refresh: { type: "boolean", description: "Re-fetch the OpenRouter catalogue and the opencode model list" }, all: { type: "boolean", description: "Include models the guard blocks, with the reason" }, repo: { type: "string", description: "Repo whose local config should apply" } } }
   },
   {
-    name: "fleet_doctor",
+    name: "werkel_doctor",
     description: "Check the setup: opencode binary, authenticated providers, configured profiles, budget limits, today's spend, stuck jobs. Run this first when a delegation fails.",
     inputSchema: { type: "object", properties: { repo: { type: "string" }, warmup: { type: "boolean", description: "Also do a tiny real run to pre-install provider packages (first run is slow otherwise)" } } }
   }
@@ -124,19 +124,19 @@ const TOOLS = [
 
 // ---- handlers -------------------------------------------------------------
 
-const NEEDS_JOB = new Set(["fleet_status", "fleet_result", "fleet_diff", "fleet_logs", "fleet_followup", "fleet_apply", "fleet_cancel", "fleet_cleanup", "fleet_rate"]);
+const NEEDS_JOB = new Set(["werkel_status", "werkel_result", "werkel_diff", "werkel_logs", "werkel_followup", "werkel_apply", "werkel_cancel", "werkel_cleanup", "werkel_rate"]);
 
 async function callTool(name, a = {}) {
   // a missing id used to crash on path.join(undefined); say what is wrong instead
-  if (NEEDS_JOB.has(name) && name !== "fleet_status" && (typeof a.jobId !== "string" || !a.jobId)) {
-    return { error: `${name} needs a jobId (string). Use fleet_status to list recent jobs.` };
+  if (NEEDS_JOB.has(name) && name !== "werkel_status" && (typeof a.jobId !== "string" || !a.jobId)) {
+    return { error: `${name} needs a jobId (string). Use werkel_status to list recent jobs.` };
   }
   switch (name) {
-    case "fleet_delegate": return await J.delegate(a);
+    case "werkel_delegate": return await J.delegate(a);
 
-    case "fleet_wait": return await J.waitFor(a.jobIds ?? [], { timeoutSec: a.timeoutSec ?? 120 });
+    case "werkel_wait": return await J.waitFor(a.jobIds ?? [], { timeoutSec: a.timeoutSec ?? 120 });
 
-    case "fleet_status": {
+    case "werkel_status": {
       if (a.jobId) {
         const j = await J.refresh(a.jobId);
         return j ? J.jobView(j, { verbose: a.verbose ?? true }) : { error: `unknown job ${a.jobId}` };
@@ -157,7 +157,7 @@ async function callTool(name, a = {}) {
       };
     }
 
-    case "fleet_result": {
+    case "werkel_result": {
       const job = await J.refresh(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
       const cfg = loadConfig(job.sourceRepo);
@@ -169,20 +169,20 @@ async function callTool(name, a = {}) {
         out.uncommitted = d.uncommitted?.length ? d.uncommitted : undefined;
         // The patch runs to thousands of tokens. The report, the diffstat and the
         // file list are enough to decide whether it is worth fetching, so it is
-        // opt-in here and fleet_diff exists for when the answer is yes.
+        // opt-in here and werkel_diff exists for when the answer is yes.
         if (a.includeDiff === true) out.patch = d.patch;
-        else if (d.patchBytes) out.patchAvailable = `${d.patchBytes} bytes — fleet_diff ${job.id}`;
+        else if (d.patchBytes) out.patchAvailable = `${d.patchBytes} bytes — werkel_diff ${job.id}`;
       }
       return out;
     }
 
-    case "fleet_diff": {
+    case "werkel_diff": {
       const job = await J.refresh(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
       return await diffSummary(job, { maxChars: a.maxChars ?? 12000 });
     }
 
-    case "fleet_logs": {
+    case "werkel_logs": {
       const job = J.readJob(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
       const ev = J.parseEvents(a.jobId, job.jobDir);
@@ -204,9 +204,9 @@ async function callTool(name, a = {}) {
       };
     }
 
-    case "fleet_followup": return await J.followup(a.jobId, a.message, a);
+    case "werkel_followup": return await J.followup(a.jobId, a.message, a);
 
-    case "fleet_apply": {
+    case "werkel_apply": {
       const job = await J.refresh(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
       if (job.state === "running") return { error: "job is still running" };
@@ -218,15 +218,15 @@ async function callTool(name, a = {}) {
       return r;
     }
 
-    case "fleet_rate": {
+    case "werkel_rate": {
       const job = J.readJob(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
       return J.rate(job, a);
     }
 
-    case "fleet_cancel": return await J.cancel(a.jobId);
+    case "werkel_cancel": return await J.cancel(a.jobId);
 
-    case "fleet_cleanup": {
+    case "werkel_cleanup": {
       const job = J.readJob(a.jobId);
       if (!job) return { error: `unknown job ${a.jobId}` };
       if (a.purge) return await J.forget(a.jobId, { force: a.force });
@@ -234,7 +234,7 @@ async function callTool(name, a = {}) {
       return await removeWorktree(job, { force: a.force, deleteBranch: a.deleteBranch !== false });
     }
 
-    case "fleet_models": {
+    case "werkel_models": {
       const cfg = loadConfig(a.repo);
       const rows = await allowedModels(cfg, { refresh: a.refresh, cwd: a.repo ?? process.cwd() });
       const allowed = rows.filter((r) => r.allowed);
@@ -249,7 +249,7 @@ async function callTool(name, a = {}) {
       };
     }
 
-    case "fleet_doctor": return await doctor({ repo: a.repo, warmup: a.warmup });
+    case "werkel_doctor": return await doctor({ repo: a.repo, warmup: a.warmup });
 
     default: return { error: `unknown tool ${name}` };
   }
@@ -266,7 +266,7 @@ async function handle(msg) {
       protocolVersion: params?.protocolVersion ?? "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: NAME, version: VERSION },
-      instructions: "You are the manager. Break work into self-contained jobs, delegate them to cheap OpenCode models with fleet_delegate, review every diff before fleet_apply. Never let a worker's report substitute for reading its patch."
+      instructions: "You are the manager. Break work into self-contained jobs, delegate them to cheap OpenCode models with werkel_delegate, review every diff before werkel_apply. Never let a worker's report substitute for reading its patch."
     } });
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
@@ -300,7 +300,7 @@ export function serve() {
       buf = buf.slice(nl + 1);
       if (!line) continue;
       let msg; try { msg = JSON.parse(line); } catch { continue; }
-      try { await handle(msg); } catch (e) { process.stderr.write(`fleet mcp error: ${e}\n`); }
+      try { await handle(msg); } catch (e) { process.stderr.write(`werkel mcp error: ${e}\n`); }
     }
   });
   process.stdin.on("end", () => process.exit(0));

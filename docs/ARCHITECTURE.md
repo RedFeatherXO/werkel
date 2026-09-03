@@ -12,12 +12,12 @@
 | `src/prompt.mjs` | Turns a delegation into a structured work order for a model that has never seen the repo. |
 | `src/runner.mjs` | One detached node process per attempt: starts the worker, captures its streams, enforces the timeout, records the exit code. |
 | `src/process.mjs` | The two things every OS disagrees about: killing a process tree and asking whether a pid is alive. |
-| `src/health.mjs` | What the fleet learned about model availability from its own runs, so an outage is not rediscovered on every job. |
+| `src/health.mjs` | What werkel learned about model availability from its own runs, so an outage is not rediscovered on every job. |
 | `src/doctor.mjs` | Setup diagnosis: binaries, providers, profiles, budget, stale jobs, optional warmup run. |
-| `src/config.mjs` | Layered config: defaults → global → project → `OPENCODE_FLEET_CONFIG`. |
-| `bin/ocfleet.mjs` | CLI over the same engine, plus `mcp` and `install`. |
+| `src/config.mjs` | Layered config: defaults → global → project → `WERKEL_CONFIG`. |
+| `bin/werkel.mjs` | CLI over the same engine, plus `mcp` and `install`. |
 
-State lives under `~/.opencode-fleet/` (override with `OPENCODE_FLEET_HOME`):
+State lives under `~/.werkel/` (override with `WERKEL_HOME`):
 
 ```
 jobs/<jobId>/  job.json  prompt.md  events.ndjson  stderr.log  run.json  exit
@@ -29,28 +29,28 @@ cache/         openrouter.json  opencode-models-<dir>.json
 ## Job flow
 
 ```
-fleet_delegate
+werkel_delegate
   ├─ loadConfig(repo)                    global + project layers
   ├─ resolveModel(profile|model)         budget guard decides before anything runs
   ├─ headSha(repo)                       pin the base now, even if the job waits
   └─ slot free?  ─ no →  state: "queued"  (nothing is refused; startQueued() takes it later)
                  └ yes →  startJob()
-                            ├─ createWorktree()      git worktree add -b fleet/<jobId>
+                            ├─ createWorktree()      git worktree add -b werkel/<jobId>
                             ├─ buildWorkerPrompt()   → jobDir/prompt.md
                             └─ launch()              node runner.mjs (detached) → opencode run --format json
                                               │
                                               ├─ events.ndjson   (step_start / tool_use / text / step_finish)
                                               └─ exit            (exit code, written by the runner)
-fleet_wait / fleet_status
+werkel_wait / werkel_status
   ├─ refresh()      reads exit + events → state, tokens, cost, report → auto-commit on the job branch
   └─ startQueued()  a finished job frees a slot → the oldest waiting job starts
-fleet_result / fleet_diff → review → fleet_apply → fleet_cleanup
+werkel_result / werkel_diff → review → werkel_apply → werkel_cleanup
 ```
 
 ## Design decisions, and the surprises behind them
 
 **The strongest verdict on a worker was an action nobody recorded.**
-`fleet_apply` merged a branch and wrote nothing back to the job, so five minutes
+`werkel_apply` merged a branch and wrote nothing back to the job, so five minutes
 later an accepted diff and an abandoned one looked identical on disk. That is
 revealed preference — somebody read the diff and let it into their code — and it
 was more valuable than any rating, so `src/outcome.mjs` now captures it, along
@@ -93,7 +93,7 @@ profile is roughly a difficulty class. `strong` sees only the hard jobs, and ran
 it against `cheap` would measure task difficulty rather than model quality.
 
 **A model ranking that runs once is not a ranking, it is a snapshot.**
-The scoring existed only inside `ocfleet suggest`, a command run by hand — so a
+The scoring existed only inside `werkel suggest`, a command run by hand — so a
 candidate list written in August stayed in force indefinitely while new models
 appeared weekly. Nothing broke, which is why nobody would notice: the jobs kept
 running, just not on the best thing available. Profiles older than
@@ -104,7 +104,7 @@ Two guards make that safe to do unattended. `suggestProfiles` now applies
 models the guard already allows — never a premium one, never a denylisted one.
 (It did not before, which is how a denylisted `gpt-5` ended up sitting in a
 suggested `balanced` profile, refused on every single job.) And a config without a
-`profilesWrittenAt` stamp is never touched: no stamp means the fleet did not write
+`profilesWrittenAt` stamp is never touched: no stamp means werkel did not write
 those profiles, and replacing someone's hand-curated list on their next delegation
 would be losing their work, not refreshing it. `suggest --write` stamps the file,
 which is what opts a user in.
@@ -115,7 +115,7 @@ today's score (recent failures still go last) and hands that order to the failov
 chain, so a retry cannot ignore the ranking the first attempt applied.
 
 **Polling is the manager's real cost, so a poll that has nothing to say says nothing.**
-A blocking `fleet_wait` survives about fifty seconds before a desktop bridge cuts the
+A blocking `werkel_wait` survives about fifty seconds before a desktop bridge cuts the
 call (measured: 240s fails with "device did not respond within 60s", 52s returns
 fine). Waiting longer is therefore impossible and backing off is pointless — there is
 no idle time between calls, each already blocks to the ceiling. The number of round
@@ -130,9 +130,9 @@ and nothing else: 4x smaller, and the flag lets the manager skip thinking about 
 entirely. `jobPulse()` decides what counts as a change — state, attempt index and
 model — so a silent poll can never hide a finished job or a failover.
 
-Three smaller leaks went with it: `fleet_result` echoed the manager's own thousand-word
-work order back at them, shipped the full patch by default (now `fleet_diff`'s job,
-with the diffstat left behind to decide by), and `fleet_logs` repeated the absolute
+Three smaller leaks went with it: `werkel_result` echoed the manager's own thousand-word
+work order back at them, shipped the full patch by default (now `werkel_diff`'s job,
+with the diffstat left behind to decide by), and `werkel_logs` repeated the absolute
 worktree path on every one of its forty tool calls.
 
 **Over the limit means queued, never refused.**
@@ -154,7 +154,7 @@ queue moves whether the manager polls or waits. Two details that were not obviou
 **Jobs run detached, not as child processes of the MCP server.**
 An MCP tool call that blocks for fifteen minutes is a broken tool call. A runner process
 (`src/runner.mjs`) owns the worker, enforces the timeout with a watchdog, and writes the exit
-code to disk. State is therefore reconstructible: restart Claude mid-job and `fleet_status`
+code to disk. State is therefore reconstructible: restart Claude mid-job and `werkel_status`
 still reports it correctly.
 
 This started life as a generated `run.sh`, which was three platform bugs waiting to happen:
@@ -205,7 +205,7 @@ Gemini model is penalised as a small variant.
 
 **Suggestions only name providers you can reach.**
 `opencode models` happily lists Bedrock and Copilot models on a machine with no such
-credentials; a profile built from that list would hang on first use. `ocfleet suggest`
+credentials; a profile built from that list would hang on first use. `werkel suggest`
 therefore intersects the model list with the providers found in opencode's auth store, your
 opencode config, and the usual API-key environment variables — reading provider names only,
 never secrets.

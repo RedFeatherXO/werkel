@@ -9,9 +9,9 @@ import path from "node:path";
 // These tests cover the two ways that could go wrong: writing something the
 // budget guard refuses, and writing when nobody asked.
 
-const home = fs.mkdtempSync(path.join(os.tmpdir(), "ocfleet-prof-"));
-process.env.OPENCODE_FLEET_HOME = home;
-const CONFIG = path.join(home, "fleet.config.json");
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "werkel-prof-"));
+process.env.WERKEL_HOME = home;
+const CONFIG = path.join(home, "werkel.config.json");
 
 const M = await import("../src/models.mjs");
 
