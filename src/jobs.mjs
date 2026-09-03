@@ -536,6 +536,10 @@ function prunableIds() {
 async function pruneJobIds(cfg) {
   const keep = Number(cfg?.defaults?.keepJobs);
   if (!(keep > 0)) return [];   // 0 means unlimited
+  // refreshAll() runs on every status poll, so the common case must stay cheap:
+  // one readdir. Only once the store is actually over the limit is it worth
+  // reading every record back to find out which ones may go.
+  if (listJobIds().length <= keep) return [];
   // Only prunable records count against the limit, so a pile of unmerged
   // worktrees cannot push finished jobs out of the store.
   const newestFirst = prunableIds().map(readJob).filter(Boolean)

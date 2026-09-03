@@ -173,10 +173,13 @@ let openKey = null;
 let armedDay = null;
 let armTimer = null;
 const groupStatus = {};
-let collapsedDays = new Set();
+// Only what the user actually chose, day -> open?. Everything else falls back to
+// the default below, so a fresh browser folds history away instead of showing
+// every day it has ever seen.
+let dayPrefs = {};
 try {
-  const stored = JSON.parse(localStorage.getItem("fleet.collapsedDays"));
-  if (Array.isArray(stored)) collapsedDays = new Set(stored);
+  const stored = JSON.parse(localStorage.getItem("fleet.dayPrefs"));
+  if (stored && !Array.isArray(stored) && typeof stored === "object") dayPrefs = stored;
 } catch {}
 
 const fmtCost = (n) => n == null ? "–" : (n === 0 ? "$0" : n < 0.01 ? "$" + n.toFixed(4) : "$" + n.toFixed(2));
@@ -215,10 +218,13 @@ function byInterest(a, b) {
   return (b.startedMs ?? 0) - (a.startedMs ?? 0);
 }
 
-function saveCollapsed() {
-  try {
-    localStorage.setItem("fleet.collapsedDays", JSON.stringify([...collapsedDays]));
-  } catch {}
+function saveDayPrefs(visibleDays) {
+  // Drop choices for days that have scrolled out of the data, so this cannot
+  // quietly grow for as long as the dashboard is used.
+  if (visibleDays) {
+    for (const k of Object.keys(dayPrefs)) if (!visibleDays.has(k)) delete dayPrefs[k];
+  }
+  try { localStorage.setItem("fleet.dayPrefs", JSON.stringify(dayPrefs)); } catch {}
 }
 
 const dayKey = (ms) => {
@@ -276,10 +282,12 @@ function render() {
   const grid = $("grid");
   const list = jobs.filter(matches);
   const groups = buildGroups(list);
+  const today = dayKey(Date.now());
 
   grid.innerHTML = groups.map((g) => {
     const cost = fmtCost(g.jobs.reduce((a, j) => a + (j.costUsd || 0), 0));
-    const open = g.day === null || !collapsedDays.has(g.day);
+    // Today open, older days folded — unless the user said otherwise for that day.
+    const open = g.day === null ? true : (dayPrefs[g.day] ?? (g.day === today));
     const armed = g.day !== null && armedDay === g.day;
     const status = g.day !== null && groupStatus[g.day] ? `<span class="g-status">${esc(groupStatus[g.day])}</span>` : "";
     const forget = g.day === null ? "" : `<button class="forget${armed ? " arm" : ""}" data-day="${esc(g.day)}">${armed ? "wirklich?" : "löschen"}</button>`;
@@ -296,11 +304,11 @@ function render() {
     </details>`;
   }).join("");
 
+  const visibleDays = new Set(groups.map((g) => g.day).filter(Boolean));
   grid.querySelectorAll("details[data-day]").forEach((d) =>
     d.addEventListener("toggle", () => {
-      if (d.open) collapsedDays.delete(d.dataset.day);
-      else collapsedDays.add(d.dataset.day);
-      saveCollapsed();
+      dayPrefs[d.dataset.day] = d.open;
+      saveDayPrefs(visibleDays);
     })
   );
 
@@ -443,6 +451,9 @@ const es = new EventSource("/api/events");
 es.addEventListener("job", load);
 es.addEventListener("tick", load);
 es.addEventListener("command", load);
+// The bulk /api/forget broadcasts only this — without it a second open tab would
+// keep showing the deleted cards until the next push happened to arrive.
+es.addEventListener("forget", load);
 es.onerror = () => $("live").classList.add("stale");
 
 load();

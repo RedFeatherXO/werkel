@@ -141,6 +141,17 @@ function viewerAllowed(req, res) {
   return false;
 }
 
+/** Running first, then the queue in the order it will start, then history.
+ *  A waiting job has no startedMs, so plain recency would bury it at the bottom —
+ *  exactly the jobs somebody opened the dashboard to look at. */
+function byInterest(a, b) {
+  const rank = (j) => (j.state === "running" ? 0 : j.state === "queued" ? 1 : 2);
+  const ra = rank(a), rb = rank(b);
+  if (ra !== rb) return ra - rb;
+  if (ra === 1) return (a.queuedAt ?? 0) - (b.queuedAt ?? 0);   // oldest waits at the top: it goes next
+  return (b.startedMs ?? 0) - (a.startedMs ?? 0);
+}
+
 // ---- routes --------------------------------------------------------------
 
 async function handle(req, res) {
@@ -195,17 +206,6 @@ async function handle(req, res) {
 
   // --- everything below is for the browser
   if (!viewerAllowed(req, res)) return;
-
-/** Running first, then the queue in the order it will start, then history.
- *  A waiting job has no startedMs, so plain recency would bury it at the bottom —
- *  exactly the jobs somebody opened the dashboard to look at. */
-function byInterest(a, b) {
-  const rank = (j) => (j.state === "running" ? 0 : j.state === "queued" ? 1 : 2);
-  const ra = rank(a), rb = rank(b);
-  if (ra !== rb) return ra - rb;
-  if (ra === 1) return (a.queuedAt ?? 0) - (b.queuedAt ?? 0);   // oldest waits at the top: it goes next
-  return (b.startedMs ?? 0) - (a.startedMs ?? 0);
-}
 
   if (req.method === "POST" && p === "/api/forget") {
     let body;
