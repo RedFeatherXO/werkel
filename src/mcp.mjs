@@ -10,6 +10,7 @@ import * as J from "./jobs.mjs";
 import { applyJob, removeWorktree, diffSummary } from "./worktree.mjs";
 import { doctor } from "./doctor.mjs";
 import { truncate } from "./util.mjs";
+import { pressureNote } from "./plan.mjs";
 
 const NAME = "werkel";
 const VERSION = "0.1.0";
@@ -123,6 +124,8 @@ const TOOLS = [
 ];
 
 // ---- handlers -------------------------------------------------------------
+
+const PRESSURE_ON = new Set(["werkel_delegate", "werkel_status"]);
 
 const NEEDS_JOB = new Set(["werkel_status", "werkel_result", "werkel_diff", "werkel_logs", "werkel_followup", "werkel_apply", "werkel_cancel", "werkel_cleanup", "werkel_rate"]);
 
@@ -266,7 +269,7 @@ async function handle(msg) {
       protocolVersion: params?.protocolVersion ?? "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: NAME, version: VERSION },
-      instructions: "You are the manager. Break work into self-contained jobs, delegate them to cheap OpenCode models with werkel_delegate, review every diff before werkel_apply. Never let a worker's report substitute for reading its patch."
+      instructions: "You are the manager. Break work into self-contained jobs, delegate them to cheap OpenCode models with werkel_delegate, review every diff before werkel_apply. Never let a worker's report substitute for reading its patch. When a response carries a planBudget field, the user's Claude subscription is under pressure: workers do not draw on it at all, so shift the threshold for what is worth handing off — but keep doing small single edits yourself, since briefing and reviewing a worker costs subscription tokens too."
     } });
   }
   if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
@@ -277,6 +280,16 @@ async function handle(msg) {
     try {
       const result = await callTool(tname, params?.arguments ?? {});
       const isError = !!result?.error;
+      // The two moments where the plan budget can still change a decision: when
+      // Claude is about to hand work off, and when it is taking stock. Anywhere
+      // else it would be a banner, and a banner on every response is ignored by
+      // the time it matters.
+      if (!isError && PRESSURE_ON.has(tname) && result && typeof result === "object") {
+        try {
+          const note = pressureNote();
+          if (note) result.planBudget = note;
+        } catch {}
+      }
       return send({ jsonrpc: "2.0", id, result: {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         isError

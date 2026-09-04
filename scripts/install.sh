@@ -25,7 +25,7 @@ say "✓ opencode $(opencode --version 2>/dev/null || echo '?')"
 mkdir -p "${WERKEL_HOME:-$HOME/.werkel}"
 CFG="${WERKEL_HOME:-$HOME/.werkel}/werkel.config.json"
 if [ ! -f "$CFG" ]; then
-  cp "$ROOT/config/fleet.config.example.json" "$CFG"
+  cp "$ROOT/config/werkel.config.example.json" "$CFG"
   say "✓ wrote $CFG  (edit budget + profiles there)"
 else
   say "· keeping existing $CFG"
@@ -38,11 +38,9 @@ node "$ROOT/bin/werkel.mjs" install --scope user
 # put `werkel` on the PATH — the docs referred to it long before anything created it
 node "$ROOT/bin/werkel.mjs" link
 
-SKILLS_DIR="$HOME/.claude/skills"
-mkdir -p "$SKILLS_DIR"
-cp -r "$ROOT/skills/werkel" "$SKILLS_DIR/" 2>/dev/null \
-  && say "✓ installed manager skill to $SKILLS_DIR/werkel" \
-  || say "· could not install skill (copy skills/werkel manually)"
+# manager skill into ~/.claude/skills — one code path with `werkel skill`, so a
+# re-run refreshes a stale copy and clears the pre-rename opencode-fleet skill
+node "$ROOT/bin/werkel.mjs" skill || say "· could not install skill (run: node bin/werkel.mjs skill)"
 
 echo
 say "next:"

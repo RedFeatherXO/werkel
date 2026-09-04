@@ -105,6 +105,17 @@
   .score + .est { color: var(--muted); font-size: 13px; margin-left: 1px; }
   .delta { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .delta.up { color: var(--rank); }
+  /* Plan budget: four steps of one ramp, with the level spelled out beside it so
+     the colour is reinforcement rather than the message. */
+  #s-plan b { padding: 1px 6px; border-radius: 999px; font-weight: 600; }
+  #s-plan.relaxed b  { background: var(--rank-tint); color: var(--rank); }
+  #s-plan.watch b    { background: #f0efec; color: #6b5e12; }
+  #s-plan.conserve b { background: #fbbf2422; color: #8a5a00; }
+  #s-plan.critical b { background: #e3494822; color: var(--neg); }
+  @media (prefers-color-scheme: dark) {
+    #s-plan.watch b    { background: #38383522; color: #d8cf8a; }
+    #s-plan.conserve b { background: #fbbf2422; color: #fbbf24; }
+  }
   .delta.down { color: var(--neg); }
   .delta.zero { color: var(--muted); opacity: .5; }
 
@@ -208,6 +219,7 @@
     <span><b id="s-done">0</b> fertig</span>
     <span><b id="s-failed">0</b> fehlgeschlagen</span>
     <span><b id="s-cost">$0</b> gesamt</span>
+    <span id="s-plan" hidden></span>
     <span id="s-hosts"></span>
   </div>
   <div class="tabs" id="tabs" role="tablist">
@@ -399,7 +411,7 @@ function render() {
   $("empty").hidden = list.length > 0;
   $("empty").innerHTML = jobs.length
     ? "Keine Jobs in dieser Ansicht."
-    : `Noch keine Daten. Starte auf dem Rechner mit den Jobs:<br><br><code>ocfleet report --to ${esc(location.origin)}</code>`;
+    : `Noch keine Daten. Starte auf dem Rechner mit den Jobs:<br><br><code>werkel report --to ${esc(location.origin)}</code>`;
 
   const by = (s) => jobs.filter((j) => j.state === s).length;
   $("s-queued").textContent = by("queued");
@@ -541,7 +553,7 @@ function renderModels() {
     t.innerHTML = "";
     $("mempty").hidden = false;
     $("mempty").innerHTML = "Keine Modelle gemeldet. Läuft der Reporter? Auf dem Rechner mit den Jobs " +
-      "genügt <code>ocfleet dashboard</code> — der meldet sich selbst.";
+      "genügt <code>werkel dashboard</code> — der meldet sich selbst.";
     return;
   }
   $("mempty").hidden = true;
@@ -606,6 +618,26 @@ async function load() {
   const b = await r.json();
   jobs = b.jobs || [];
   const hosts = Object.entries(b.hosts || {});
+  // The plan reading arrives with each host's snapshot; show the worst one, since
+  // that is the one that will stop work.
+  const RANK = { relaxed: 0, watch: 1, conserve: 2, critical: 3 };
+  const LABEL = { relaxed: "entspannt", watch: "im Blick", conserve: "sparen", critical: "kritisch" };
+  const plans = hosts.map(([, v]) => v.plan).filter((x) => x && x.known);
+  const plan = plans.sort((a, c) => RANK[c.level] - RANK[a.level])[0];
+  const planEl = $("s-plan");
+  planEl.hidden = !plan;
+  if (plan) {
+    planEl.className = plan.level;
+    const w = plan.windows || {};
+    const bits = [];
+    if (w.fiveHour) bits.push(`5h ${Math.round(w.fiveHour.pct)}%`);
+    if (w.sevenDay) bits.push(`Woche ${Math.round(w.sevenDay.pct)}%`);
+    planEl.innerHTML = "";
+    planEl.append("Plan ", Object.assign(document.createElement("b"), {
+      textContent: `${bits.join(" · ")} — ${LABEL[plan.level] ?? plan.level}${plan.stale ? " (alt)" : ""}`
+    }));
+    planEl.title = plan.reason + "\n\n" + plan.advice;
+  }
   $("s-hosts").textContent = hosts.length
     ? hosts.map(([h, v]) => `${h} · ${ago(v.lastSeen)}`).join(" | ")
     : "kein Reporter verbunden";

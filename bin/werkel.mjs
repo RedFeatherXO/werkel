@@ -13,6 +13,7 @@ import * as J from "../src/jobs.mjs";
 import { applyJob, removeWorktree, diffSummary } from "../src/worktree.mjs";
 import { doctor } from "../src/doctor.mjs";
 import { report } from "../src/reporter.mjs";
+import * as PLAN from "../src/plan.mjs";
 import { serve } from "../src/mcp.mjs";
 import { createRequire } from "node:module";
 const require$ = createRequire(import.meta.url);
@@ -101,6 +102,10 @@ werkel — delegate coding jobs from Claude to OpenCode workers on cheaper model
   werkel mcp                            run as an MCP stdio server (for Claude)
   werkel install [--scope user|project|print]   register the MCP server with Claude Code
   werkel link [--dir <path>]            put werkel on your PATH (default ~/.local/bin)
+  werkel skill [--dir <path>]           install/refresh the manager skill for Claude
+  werkel statusline [--then <cmd>]      Claude Code statusLine hook: records plan usage,
+                                        passes stdin on to <cmd> so an existing line survives
+  werkel pressure [--json]              how much of the Claude plan is left, and what to do
   werkel board [--all]                  every routable model ranked: base score + experience
   werkel experience [--profile <p>]     only the models werkel has actually used
   werkel init-config [--force]          write a starter werkel.config.json
@@ -122,6 +127,10 @@ const cmds = {
       p(`  defaults   profile ${d.profile}, up to ${d.maxConcurrentJobs} workers at once, ${d.timeoutSec}s timeout, worktree ${d.worktree ? "on" : "off"}, failover ${d.failover ? "on" : "off"}`);
     }
     p(`  budget     ${SYM.le} $${r.info.budget.maxPromptUsdPerMTok}/Mtok in, ${SYM.le} $${r.info.budget.maxCompletionUsdPerMTok}/Mtok out, ${usd(r.info.spentTodayUsd)} spent today of ${usd(r.info.dailyLimitUsd)}`);
+    if (r.info.planBudget) {
+      const pb = r.info.planBudget;
+      p(`  plan       ${typeof pb === "string" ? pb : `${pb.level} \u2014 ${pb.reason}`}`);
+    }
     p("\n  profiles:");
     for (const [name, prof] of Object.entries(r.info.profiles ?? {})) {
       p(`    ${name.padEnd(12)} ${prof.usable ? SYM.arrow + " " + prof.usable : SYM.fail + " nothing usable"}`);
@@ -496,6 +505,139 @@ const cmds = {
       for (const nt of (r.notes ?? []).slice(0, 2)) if (nt.note) p(`       ${SYM.dot} ${nt.note}`);
     }
     p(`\n  score is the nudge added to the published benchmark, capped by defaults.experienceMaxShift\n`);
+  },
+
+  /**
+   * Copy the manager skill to where Claude looks for it.
+   *
+   * The installer did this once, at install time, and nothing ever refreshed it.
+   * So every improvement to the skill since — what to delegate, how to brief a
+   * worker, what to check in a review — stayed in the repo while Claude went on
+   * reading a months-old copy. That is a bad failure because it is invisible:
+   * everything works, just less well than it should.
+   */
+  async skill(a) {
+    const src = path.join(ROOT, "skills", "werkel");
+    const dir = a.flags.dir ?? path.join(os.homedir(), ".claude", "skills");
+    const dest = path.join(dir, "werkel");
+    if (!fs.existsSync(path.join(src, "SKILL.md"))) {
+      p(`\n  ${SYM.fail} no skill found at ${src}\n`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const before = (() => {
+      try { return fs.readFileSync(path.join(dest, "SKILL.md"), "utf8"); } catch { return null; }
+    })();
+
+    fs.mkdirSync(dir, { recursive: true });
+    fs.rmSync(dest, { recursive: true, force: true });
+    fs.cpSync(src, dest, { recursive: true });
+
+    const after = fs.readFileSync(path.join(dest, "SKILL.md"), "utf8");
+    const state = before === null ? "installed" : before === after ? "already current" : "updated";
+    p(`\n  ${SYM.ok} ${state}: ${dest}`);
+
+    // A skill left over from the old name would still be loaded, and it teaches
+    // tool names that no longer exist.
+    const stale = path.join(dir, "opencode-fleet");
+    if (fs.existsSync(stale)) {
+      fs.rmSync(stale, { recursive: true, force: true });
+      p(`  ${SYM.ok} removed the old opencode-fleet skill — it taught tool names that are gone`);
+    }
+    p(`\n  restart Claude so it picks the skill up.\n`);
+  },
+
+  /**
+   * Claude Code's statusLine hook is the only supported way to read subscription
+   * usage from a script — there is no API for it. This sits in that hook, keeps
+   * the numbers, and hands stdin on to whatever status line was already there,
+   * so wiring it up costs you nothing you had before.
+   *
+   * It must never break the status bar: any failure here prints a plain line and
+   * exits 0 rather than leaving Claude Code with a broken command.
+   */
+  async statusline(a) {
+    const raw = await new Promise((resolve) => {
+      let buf = "";
+      const timer = setTimeout(() => resolve(buf), 4000);
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (c) => { buf += c; });
+      process.stdin.on("end", () => { clearTimeout(timer); resolve(buf); });
+      process.stdin.on("error", () => { clearTimeout(timer); resolve(buf); });
+    });
+
+    let data = null;
+    try { data = JSON.parse(raw); } catch {}
+    // Leave a mark on every run, before anything else can go wrong: a hook that
+    // never fires and a hook whose payload has no limits look the same from the
+    // outside, and only one of them is werkel's problem.
+    try {
+      PLAN.noteHook({
+        parsed: !!data,
+        hadRateLimits: !!data?.rate_limits,
+        windows: Object.keys(data?.rate_limits ?? {}),
+        topKeys: data && typeof data === "object" ? Object.keys(data) : []
+      });
+    } catch {}
+    try { if (data?.rate_limits) PLAN.record(data.rate_limits); } catch {}
+
+    const then = a.flags.then;
+    if (then) {
+      // Pass the original stdin through untouched — the other script expects
+      // exactly what Claude Code sent, not our idea of it.
+      const { spawn } = await import("node:child_process");
+      // stdout is captured rather than inherited so a status line that fails
+      // silently — a typo in the command, a missing interpreter — leaves a
+      // reading behind instead of an empty bar.
+      const child = spawn(String(then), { shell: true, stdio: ["pipe", "pipe", "inherit"] });
+      let out = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (c) => { out += c; });
+      child.on("error", () => {});
+      child.stdin.on("error", () => {});
+      child.stdin.end(raw);
+      await new Promise((r) => { child.on("close", r); child.on("error", () => r()); });
+      if (out.trim()) process.stdout.write(out.endsWith("\n") ? out : out + "\n");
+      else if (!a.flags.quiet) p(PLAN.statusLineText());
+      return;
+    }
+    if (a.flags.quiet) return;
+    p(PLAN.statusLineText());
+  },
+
+  async pressure(a) {
+    const pr = PLAN.pressure();
+    if (a.flags.json) return jsonOut(pr);
+    if (!pr.known) {
+      const w = PLAN.checkWiring();
+      p(`\n  ${SYM.warn} ${pr.reason}`);
+      for (const x of w.problems) p(`  ${SYM.fail} ${x}`);
+      for (const x of w.next) p(`  ${SYM.arrow} ${x}`);
+      if (!w.wired) {
+        const self = `${process.execPath} ${path.join(ROOT, "bin", "werkel.mjs")} statusline`;
+        p(`\n  add to ${w.settingsPath}:\n`);
+        p(`    "statusLine": { "type": "command", "command": "${self}" }\n`);
+        p(`  keeping a status line you already have — stdin is passed through untouched:\n`);
+        p(`    "statusLine": { "type": "command", "command": "${self} --then '<your command>'" }\n`);
+      } else p("");
+      return;
+    }
+    p(`\n  ${pr.level === "relaxed" ? SYM.ok : SYM.warn} plan budget: ${pr.level}${pr.stale ? " (reading is stale)" : ""}`);
+    p(`  ${pr.reason}\n`);
+    for (const spec of PLAN.WINDOWS) {
+      const w = pr.windows[spec.key];
+      if (!w) { p(`  ${spec.label.padEnd(7)} ${SYM.dot} not reported`); continue; }
+      const proj = w.projectedEndPct == null ? "" :
+        w.projectedEndPct > 100
+          ? `  ${SYM.arrow} runs out in ${PLAN.humanSpan(w.exhaustsInMs)}`
+          : `  ${SYM.arrow} ends at ~${Math.round(w.projectedEndPct)}%`;
+      const rate = w.burnPctPerHour == null ? "" : `  ${w.burnPctPerHour.toFixed(1)}%/h`;
+      p(`  ${spec.label.padEnd(7)} ${String(Math.round(w.pct)).padStart(3)}%  resets in ${PLAN.humanSpan(w.resetsIn).padEnd(8)}${rate.padEnd(10)}${proj}`);
+    }
+    p(`\n  ${pr.advice}\n`);
+    p(`  ${SYM.dot} basis: ${PLAN.WINDOWS.map((s2) => pr.windows[s2.key] && `${s2.label}=${pr.windows[s2.key].basis}`).filter(Boolean).join(", ")}` +
+      `; sampled ${PLAN.humanSpan(pr.ageMs)} ago\n`);
   },
 
   async link(a) {

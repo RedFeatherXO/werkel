@@ -82,12 +82,23 @@ because there is no symlink to make.
 <details>
 <summary>Registering with Claude by hand</summary>
 
-```json
-{ "mcpServers": {
-    "werkel": { "command": "node", "args": ["/abs/path/werkel/bin/werkel.mjs", "mcp"] } } }
+Do not hand-write the block — let werkel print it, filled in for your machine:
+
+```bash
+node bin/werkel.mjs install --scope print
 ```
 
-Claude Code: `claude mcp add --scope user werkel -- node /abs/path/bin/werkel.mjs mcp`
+It emits the JSON with the **absolute** path to your node binary and to
+`bin/werkel.mjs`, which is what makes it work. A bare `"command": "node"` fails
+whenever the app's environment is not your shell's: a version manager like nvm,
+or a Windows app that does not inherit your PATH. The failure looks like
+`Server disconnected` with no further explanation.
+
+Claude Code registers itself, no JSON needed:
+
+```bash
+node bin/werkel.mjs install --scope user
+```
 
 The manager skill (`skills/werkel/SKILL.md`) teaches Claude when to delegate, how to brief a
 worker and what to look for in a review. Copy it to `~/.claude/skills/` — the installer does
@@ -160,6 +171,52 @@ werkel cleanup <jobId>
 Three equivalent ways to call it: `werkel …` once it is on your PATH, `./werkel …` from the
 repo folder, or `node bin/werkel.mjs …` which always works. On Windows: `.\werkel` or
 `node bin\werkel.mjs`.
+
+## Steering by what's left of your Claude plan
+
+Workers run on your own provider credit and draw **nothing** from your Claude
+subscription. So the tighter that subscription gets, the more it is worth handing
+off — and werkel can see how tight it is.
+
+There is no API for subscription usage and no `claude usage --json`. The one
+supported route is Claude Code's statusLine hook, which is handed the server's own
+`rate_limits` on stdin. `werkel statusline` sits in that hook, keeps the numbers,
+and passes stdin straight through, so a status line you already have keeps working:
+
+Do not copy a line from here — run `werkel pressure` and paste what it prints. It
+fills in the absolute path of the node binary that is actually running it and of
+`bin/werkel.mjs`, and offers both shapes: plain, and `--then '<your command>'` to
+keep a status line you already have.
+
+Both halves of that path have to be absolute. The shell Claude Code spawns is not
+your interactive shell, so with nvm, asdf or a similar version manager a bare
+`node` is often not on its PATH, and a bare `werkel` almost never is. Nor can the
+script rely on its executable bit, which copies and checkouts drop. And Claude Code
+shows nothing at all when a status line command fails, so every one of these
+mistakes is invisible in exactly the place you would look for it. So the hook leaves a mark on every run, whether or not the
+payload carried numbers, and `werkel pressure` reports which case you are in:
+
+| What it says | What it means |
+|---|---|
+| not configured / not startable / not on PATH | the settings entry is wrong; it names the fix |
+| never run this command | the settings are fine but nothing invoked them — the statusLine is a `claude` CLI feature, and a version manager's `node` may be missing from the shell it spawns |
+| ran, but carried no rate_limits | wiring is proven good; the account does not get limits (API key, cloud provider, or no response yet) |
+| ran and carried rate_limits | a reading exists |
+
+Then `werkel pressure` shows both windows with the measured burn rate, `werkel
+doctor` reports it, and the dashboard carries a chip for it. When the plan is
+actually under pressure, `werkel_delegate` and `werkel_status` carry a
+`planBudget` line so Claude sees it without being asked.
+
+It judges by burn rate rather than by the percentage — 41% with six days left and
+41% with six hours left are not the same situation — and it derives that rate from
+observed samples rather than assuming how long a window is, because the one
+labelled `seven_day` is not reliably seven days. Two samples give a projection; one
+gives a percentage and it says so.
+
+Pressure moves the threshold for what is worth delegating. It never says to
+delegate everything: briefing a worker and reviewing its diff cost subscription
+tokens too, so a one-line change stays cheaper done directly.
 
 ## The tools Claude gets
 

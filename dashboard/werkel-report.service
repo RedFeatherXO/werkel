@@ -1,0 +1,22 @@
+# Reporter for the machine that runs the jobs.
+#   sudo cp werkel-report.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now werkel-report
+# Adjust User, the two paths and the dashboard URL first.
+[Unit]
+Description=werkel reporter (pushes job state to the dashboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=CHANGEME
+Environment=WERKEL_INGEST_TOKEN=change-me
+ExecStart=/usr/bin/node /path/to/werkel/bin/werkel.mjs report --to http://dashboard-host:7777 --interval 5
+Restart=always
+RestartSec=10
+# it only reads werkel's own state and talks to one host
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

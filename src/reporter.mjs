@@ -87,7 +87,11 @@ export async function report({ to, token, host, intervalSec = 5, once = false, l
         catch (e) { log(`model board unavailable: ${e.message}`); }
       }
       const models = board;
-      const res = await postJson(`${base}/api/ingest`, { host: who, ts: Date.now(), jobs: snapshots, models }, token);
+      // The plan reading lives on the machine that runs the jobs, not on the
+      // dashboard host, so it travels with the snapshot like everything else.
+      let plan = null;
+      try { plan = (await import("./plan.mjs")).pressure(); } catch {}
+      const res = await postJson(`${base}/api/ingest`, { host: who, ts: Date.now(), jobs: snapshots, models, plan }, token);
       for (const cmd of res?.commands ?? []) {
         let ok = true, error;
         if (cmd.action === "cancel") {

@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { which, run, stateDir, readJson, humanDuration, resolveBin } from "./util.mjs";
 import { loadConfig } from "./config.mjs";
 import { installedModels, installedModelsSmart, openrouterCatalog, modelsDevCatalog, budgetCheck, spentToday } from "./models.mjs";
@@ -171,6 +173,46 @@ export async function doctor({ repo = process.cwd(), warmup = false } = {}) {
       }
     } else out.info.warmup = "skipped, no usable model";
   }
+
+  // What is left of the Claude subscription. Absent is a normal state, not a
+  // fault: it only appears once the statusLine hook has seen a response.
+  try {
+    const { pressure } = await import("./plan.mjs");
+    const pr = pressure();
+    if (pr.known) {
+      out.info.planBudget = { level: pr.level, reason: pr.reason, stale: pr.stale };
+    } else {
+      // A broken hook and an unused one look identical from here, so say which.
+      const { checkWiring } = await import("./plan.mjs");
+      const w = checkWiring();
+      out.info.planBudget = w.problems.length
+        ? `not sampled: ${w.problems[0]} → werkel pressure`
+        : "not sampled yet — the statusLine hook is wired; it fills in after a Claude Code session";
+      if (w.wired && w.problems.length) warn(`plan usage is not being sampled: ${w.problems[0]}`);
+    }
+    if (pr.known && (pr.level === "conserve" || pr.level === "critical")) {
+      warn(`Claude plan budget ${pr.level}: ${pr.reason} \u2192 werkel pressure`);
+    }
+  } catch {}
+
+  // The installed skill is a *copy*. Every edit to skills/werkel since the last
+  // install sat unread while Claude worked from the older brief — silently, which
+  // is the worst way for a manager's instructions to be wrong.
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const source = path.join(here, "..", "skills", "werkel", "SKILL.md");
+    const installed = path.join(os.homedir(), ".claude", "skills", "werkel", "SKILL.md");
+    const legacy = path.join(os.homedir(), ".claude", "skills", "opencode-fleet");
+    if (fs.existsSync(source)) {
+      if (!fs.existsSync(installed)) {
+        warn("the manager skill is not installed, so Claude has to be told how to delegate every time \u2192 run `werkel skill`");
+      } else if (fs.readFileSync(source, "utf8") !== fs.readFileSync(installed, "utf8")) {
+        warn("the installed manager skill is out of date with this checkout \u2192 run `werkel skill`");
+      }
+      out.info.skill = fs.existsSync(installed) ? installed : "not installed";
+    }
+    if (fs.existsSync(legacy)) warn("~/.claude/skills/opencode-fleet is still there and teaches tool names that no longer exist \u2192 run `werkel skill`");
+  } catch {}
 
   if (out.ok && !out.warnings.length) out.summary = "werkel ready";
   else out.summary = `${out.problems.length} problem(s), ${out.warnings.length} warning(s)`;

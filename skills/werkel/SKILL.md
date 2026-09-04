@@ -51,6 +51,34 @@ describe it — otherwise describing it *is* the work order.
 repository with no commits, so commit a baseline before the first delegation.
 `werkel_delegate` will tell you this if you forget, but it costs a round trip.
 
+### When the plan budget is tight
+
+`werkel_delegate` and `werkel_status` may come back with a **`planBudget`** field.
+It appears only when the user's Claude subscription is actually under pressure, so
+when it is there, read it.
+
+The reason it matters: **workers do not draw on the subscription at all.** They run
+on the user's own provider credit, metered separately in dollars. Every job you
+hand off converts plan usage into cents.
+
+But delegating is not free on the plan side either — briefing, reading the diff and
+applying it are all your turns, spending plan tokens. A one-line change costs *more*
+plan budget delegated than done directly. So pressure does not mean "delegate
+everything"; it **moves the line** in the table above:
+
+| `planBudget` says | What changes |
+|---|---|
+| *(absent)* | Nothing. Delegate on the usual grounds. |
+| `watch` | Hand off mechanical work you would have done yourself out of habit — especially anything spanning many files. |
+| `conserve` | Delegate anything specifiable. Batch related jobs so one review covers several. Spend your turns on briefing and reviewing rather than typing. |
+| `critical` | As above, and keep your own turns short: fewer exploratory reads, no re-reading files you have seen, state conclusions instead of narrating. |
+
+What never changes, at any level: you still read every diff before `werkel_apply`,
+and a small single edit is still faster done yourself.
+
+If the user asks where they stand, `werkel_doctor` reports it, and `werkel pressure`
+on the command line shows both windows with the burn rate.
+
 ## What a worker is allowed to do
 
 The default is a git worktree with auto-approved permissions: the worker can do

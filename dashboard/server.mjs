@@ -188,7 +188,7 @@ async function handle(req, res) {
       state.models[host] = body.models;
       broadcast("models", { host, rows: body.models.length });
     }
-    state.hosts[host] = { lastSeen: Date.now(), jobs: seen.length };
+    state.hosts[host] = { lastSeen: Date.now(), jobs: seen.length, plan: body.plan ?? null };
     prune();
     saveSoon();
     broadcast("tick", { host, jobs: seen.length, at: Date.now() });

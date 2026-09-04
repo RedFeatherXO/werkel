@@ -424,6 +424,29 @@ ok("cleanup both", cleanA.ok && cleanB.ok);
 const status = await call("werkel_status", {});
 ok("status lists history", status.recent?.length >= 2, `${status.recent?.length} recent, spent $${status.spentTodayUsd}`);
 
+// Plan budget: the note must reach Claude through the tool response, and must
+// stay off it while there is nothing to say. This is the whole delivery path —
+// a working model that nobody ever reads changes no decision.
+{
+  const fsx = await import("node:fs");
+  const planFile = path.join(TEST_HOME, "plan-usage.json");
+  ok("plan: silent with no reading", !(await call("werkel_status", {})).planBudget, "no sample recorded yet");
+
+  const H = 3600e3, now = Date.now();
+  const at = (t, pct) => ({ at: t, sevenDay: { pct, resetsAt: now + 40 * H } });
+  // 30% -> 85% in eight hours with well over a day to go: it runs out first
+  fsx.writeFileSync(planFile, JSON.stringify({ samples: [at(now - 8 * H, 30), at(now, 85)] }));
+  const hot = await call("werkel_status", {});
+  ok("plan: pressure reaches the tool response", typeof hot.planBudget === "string", (hot.planBudget || "").slice(0, 80));
+  ok("plan: it says what to do, not just a number", /delegat/i.test(hot.planBudget || ""), "advice present");
+  ok("plan: never advises delegating everything", /directly/i.test(hot.planBudget || ""),
+     "small edits stay with the manager");
+
+  fsx.writeFileSync(planFile, JSON.stringify({ samples: [at(now - 8 * H, 1), at(now, 3)] }));
+  ok("plan: silent again once there is room", !(await call("werkel_status", {})).planBudget, "no banner when calm");
+  fsx.rmSync(planFile, { force: true });
+}
+
 srv.kill(); shutdown();
 console.log("\n(a FAIL above means the harness regressed — see README > Development)");
 process.exit(0);

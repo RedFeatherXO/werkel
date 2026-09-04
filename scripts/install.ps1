@@ -13,8 +13,7 @@ $scriptDir = $PSScriptRoot
 if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $root = Split-Path -Parent $scriptDir
 $binOcfleet = Join-Path (Join-Path $root "bin") "werkel.mjs"
-$exampleConfig = Join-Path (Join-Path $root "config") "fleet.config.example.json"
-$skillSource = Join-Path (Join-Path $root "skills") "werkel"
+$exampleConfig = Join-Path (Join-Path $root "config") "werkel.config.example.json"
 
 function Say([string]$msg) { Write-Host "  $msg" }
 
@@ -103,16 +102,11 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-# 6. manager skill into ~/.claude/skills (overwrite an existing copy)
-$skillsDir = Join-Path (Join-Path $HOME ".claude") "skills"
-$skillTarget = Join-Path $skillsDir "werkel"
-try {
-  New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
-  if (Test-Path $skillTarget) { Remove-Item -Recurse -Force $skillTarget }
-  Copy-Item -Recurse -Force -Path $skillSource -Destination $skillsDir
-  Say "[ok] installed manager skill to $skillTarget"
-} catch {
-  Say "[--] could not install skill (copy skills\werkel to $skillsDir manually)"
+# 6. manager skill into ~/.claude/skills - one code path with `werkel skill`, so a
+#    re-run refreshes a stale copy and clears the pre-rename opencode-fleet skill
+& node $binOcfleet skill
+if ($LASTEXITCODE -ne 0) {
+  Say "[--] could not install skill (run: node bin\werkel.mjs skill)"
 }
 
 # 7. make `werkel` callable — the docs referred to it long before anything set it up
